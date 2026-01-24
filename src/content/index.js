@@ -1,4 +1,4 @@
-import { PLATFORMS, SELECTORS, findAndFocusInput, simulateTyping } from '../utils/dom';
+import { PLATFORMS, SELECTORS } from '../utils/dom';
 
 // State
 let processedPosts = new Set();
@@ -59,7 +59,7 @@ function startObserver() {
 
     const debouncedCheck = debounce(() => {
         if (!isActive) return;
-        checkForPosts(platform);
+        addButtonsToPosts(platform);
     }, 1000);
 
     const observer = new MutationObserver((mutations) => {
@@ -70,45 +70,83 @@ function startObserver() {
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-    if (isActive) checkForPosts(platform);
+    if (isActive) addButtonsToPosts(platform);
 }
 
-function checkForPosts(platform) {
+// Add SMAC button to each post
+function addButtonsToPosts(platform) {
     if (!isActive) return;
-    if (!chrome.runtime?.id) {
-        console.warn('SMAC: Extension context invalidated.');
-        return;
-    }
+    if (!chrome.runtime?.id) return;
 
     const selector = SELECTORS[platform].post;
     const posts = document.querySelectorAll(selector);
 
-    posts.forEach(async (post) => {
+    posts.forEach((post) => {
+        // Skip if button already added
+        if (post.querySelector('.smac-btn')) return;
+
         let postId = getPostId(post, platform);
         if (!postId) return;
-        if (processedPosts.has(postId)) return;
-        if (!isInViewport(post)) return;
 
         // Skip video/audio posts
-        if (hasMediaContent(post)) {
-            console.debug('SMAC: Skipping media post', postId);
-            await saveProcessedPost(postId);
-            return;
-        }
+        if (hasMediaContent(post)) return;
 
-        await saveProcessedPost(postId);
-        processPost(post, platform, postId);
+        // Create SMAC button
+        const btn = document.createElement('button');
+        btn.className = 'smac-btn';
+        btn.innerText = '🤖 SMAC';
+        btn.style.cssText = `
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 9999;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            transition: transform 0.2s, box-shadow 0.2s;
+        `;
+
+        btn.addEventListener('mouseenter', () => {
+            btn.style.transform = 'scale(1.05)';
+            btn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.4)';
+        });
+
+        btn.addEventListener('mouseleave', () => {
+            btn.style.transform = 'scale(1)';
+            btn.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+        });
+
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            btn.innerText = '⏳ Thinking...';
+            btn.disabled = true;
+            await generateComment(post, platform, postId);
+            btn.innerText = '✅ Done';
+            setTimeout(() => {
+                btn.innerText = '🤖 SMAC';
+                btn.disabled = false;
+            }, 2000);
+        });
+
+        // Make post relative for absolute positioning
+        post.style.position = 'relative';
+        post.appendChild(btn);
     });
 }
 
-// Detect video/audio posts
 function hasMediaContent(post) {
     const hasVideo = post.querySelector('video') !== null;
     const hasAudioSpace = post.querySelector('[data-testid="audioSpace"]') !== null;
     const hasVoiceNote = post.querySelector('[data-testid="voiceRecording"]') !== null;
     const hasVideoPlayer = post.querySelector('[data-testid="videoPlayer"]') !== null;
     const hasVideoComponent = post.querySelector('[data-testid="videoComponent"]') !== null;
-
     return hasVideo || hasAudioSpace || hasVoiceNote || hasVideoPlayer || hasVideoComponent;
 }
 
@@ -141,19 +179,12 @@ async function addLog(entry) {
         const result = await chrome.storage.local.get(['smacLogs']);
         const logs = result.smacLogs || [];
         if (logs.length > 100) logs.shift();
-
-        logs.push({
-            timestamp: new Date().toISOString(),
-            ...entry
-        });
-
+        logs.push({ timestamp: new Date().toISOString(), ...entry });
         await chrome.storage.local.set({ smacLogs: logs });
-    } catch (e) {
-        // ignore
-    }
+    } catch (e) { }
 }
 
-async function processPost(post, platform, postId) {
+async function generateComment(post, platform, postId) {
     const selector = SELECTORS[platform];
     const textEl = post.querySelector(selector.text);
     const imageEl = post.querySelector(selector.image);
@@ -163,7 +194,10 @@ async function processPost(post, platform, postId) {
         imageUrl = null;
     }
 
-    if (!textEl && !imageUrl) return;
+    if (!textEl && !imageUrl) {
+        console.log('SMAC: No content to analyze');
+        return;
+    }
 
     const text = textEl ? textEl.innerText : "";
 
@@ -178,12 +212,26 @@ async function processPost(post, platform, postId) {
 
         if (response && response.success) {
             if (response.comment === 'SKIP') {
-                console.debug(`Skipped post ${postId}`);
+                console.log('=== SMAC AI ===');
+                console.log('Post:', postId);
+                console.log('Result: SKIPPED (not tech-related)');
             } else {
-                handleGeneratedComment(post, response.comment, platform, postId, !!imageUrl);
+                post.style.border = '2px solid #1DA1F2';
+
+                console.log('=== SMAC AI ===');
+                console.log('Post:', postId);
+                console.log('Vision:', imageUrl ? 'YES' : 'NO');
+                console.log('Generated Comment:', response.comment);
+
+                addLog({
+                    status: "SUCCESS",
+                    post_url: postId,
+                    vision: !!imageUrl,
+                    comment: response.comment,
+                });
             }
         } else if (response?.error) {
-            console.error('Analysis failed:', response.error);
+            console.error('SMAC Analysis failed:', response.error);
         }
     } catch (err) {
         if (!err.message.includes('Extension context invalidated') && !err.message.includes('Receiving end does not exist')) {
@@ -191,25 +239,3 @@ async function processPost(post, platform, postId) {
         }
     }
 }
-
-async function handleGeneratedComment(post, comment, platform, postId, hasImage) {
-    // Only show visual indicator (blue border)
-    post.style.border = '2px solid #1DA1F2';
-
-    // CONSOLE LOG ONLY - No injection
-    console.log('=== SMAC AI ===');
-    console.log('Post:', postId);
-    console.log('Vision:', hasImage ? 'YES' : 'NO');
-    console.log('Generated Comment:', comment);
-
-    const logEntry = {
-        status: "SUCCESS",
-        post_url: postId,
-        vision: hasImage,
-        comment: comment,
-    };
-
-    console.log(logEntry);
-    addLog(logEntry);
-}
-
