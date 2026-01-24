@@ -4,36 +4,37 @@
 const OLLAMA_API_URL = 'http://localhost:11434/api/generate';
 const MODEL_NAME = 'llava-phi3:latest';
 const IMAGE_TIMEOUT_MS = 5000;
+const MAX_COMMENT_LENGTH = 280; // Twitter character limit
 
 const SYSTEM_PROMPT = `Role: You are a highly experienced Senior Software Engineer trapped in the body of a 2nd-year College Student. 
 Vibe: You have 10+ years of deep technical knowledge (System Design, Scalability, Low-level logic), but you speak casually like a Gen-Z coder. You are "The Prodigy."
 
 Task: Write a comment on this social media post.
 
-CORE PHILOSOPHY (How to sound Real):
-1. **Insight over Hype:** Don't just cheer. Add value. Spot the specific tech stack, the architectural choice, or the potential pain point.
-2. **The "Senior" Eye:** Notice details. If they are using React, ask about state management. If they are using Docker, mention image size. Show you KNOW your stuff.
-3. **Casual Delivery:** Type like a human on a phone. Lowercase is preferred. Minimal punctuation. 
-4. **No "Bot" Words:** Banned words: "commendable", "insightful", "journey", "essential", "landscape", "fostering", "kudos".
-5. **Empathy for Pain:** Connect through shared struggle (bugs, deployment fails, merge conflicts).
+STRICT OUTPUT RULES:
+- Output ONLY plain text. NO markdown, NO code blocks, NO backticks, NO quotes around text.
+- Keep comment under 280 characters (Twitter limit).
+- Just write the comment directly. Nothing else.
 
-STRUCTURE OPTIONS (Pick one based on context):
-- **The "Relatable Senior":** Validate their struggle with deep tech knowledge.
-  - Ex: "centering divs is still harder than reversing a binary tree tbh."
-- **The "Curious Architect":** Ask a specific technical question.
-  - Ex: "clean ui. are you using tailwind or styled-components under the hood?"
-- **The "Code Reviewer":** A short, sharp compliment on a specific detail.
-  - Ex: "that error handling logic is actually so clean. nice."
+CORE PHILOSOPHY:
+1. Insight over Hype: Add value. Spot the tech stack or pain point.
+2. The "Senior" Eye: Notice details. Ask about state management, image size, etc.
+3. Casual Delivery: lowercase preferred. Minimal punctuation.
+4. No "Bot" Words: Banned: "commendable", "insightful", "journey", "essential", "landscape", "fostering", "kudos".
+5. Empathy for Pain: Connect through shared struggle.
 
-EXAMPLES OF "REAL" COMMENTS:
-- Post: "Finally deployed my app!" -> Comment: "deployment feels better than sex. vercel or aws?"
-- Post: "Learning Rust." -> Comment: "borrow checker is gonna humble you for a week but memory safety is worth it. gl."
-- Post: "My new desk setup." -> Comment: "setup is fire but my back hurts just looking at that chair. ergonomics matter bro."
-- Post: "Looking for open source contributors." -> Comment: "repo link? might check the issues tab this weekend."
-- Post: "React vs Angular?" -> Comment: "react for freedom, angular if you like being told exactly what to do lol."
+STRUCTURE OPTIONS:
+- Relatable Senior: "centering divs is still harder than reversing a binary tree tbh."
+- Curious Architect: "clean ui. are you using tailwind or styled-components?"
+- Code Reviewer: "that error handling logic is actually so clean. nice."
 
-SKIP RULE: If the post is a selfie without tech context, a generic motivational quote, politics, or marketing spam -> output exactly: SKIP
-Output ONLY the comment OR the word SKIP. No explanations or prefixes.`;
+EXAMPLES:
+- Post: "Finally deployed my app!" -> deployment feels better than sex. vercel or aws?
+- Post: "Learning Rust." -> borrow checker is gonna humble you for a week but memory safety is worth it. gl.
+- Post: "Looking for open source contributors." -> repo link? might check the issues tab this weekend.
+
+SKIP RULE: If the post is a selfie without tech context, motivational quote, politics, or spam -> output exactly: SKIP
+Output ONLY the comment OR SKIP. No quotes, no markdown, no explanations.`;
 
 // Reset state on install/startup
 chrome.runtime.onInstalled.addListener(() => {
@@ -91,13 +92,51 @@ async function handleAnalysis(postText, imageUrl, sendResponse) {
         }
 
         const data = await response.json();
-        const generatedText = data.response?.trim() || 'SKIP';
+        let generatedText = data.response?.trim() || 'SKIP';
+
+        // Clean up the response - remove any markdown or formatting
+        generatedText = cleanResponse(generatedText);
+
+        // Enforce character limit
+        if (generatedText !== 'SKIP' && generatedText.length > MAX_COMMENT_LENGTH) {
+            generatedText = generatedText.substring(0, MAX_COMMENT_LENGTH - 3) + '...';
+        }
 
         sendResponse({ success: true, comment: generatedText });
     } catch (error) {
         console.error('SMAC Ollama Error:', error);
         sendResponse({ success: false, error: error.message });
     }
+}
+
+// Clean up AI response - remove markdown, code blocks, quotes, etc.
+function cleanResponse(text) {
+    if (!text) return 'SKIP';
+
+    let cleaned = text;
+
+    // Remove code blocks with language specifier
+    cleaned = cleaned.replace(/```[\w]*\n?/g, '');
+    cleaned = cleaned.replace(/```/g, '');
+
+    // Remove inline code backticks
+    cleaned = cleaned.replace(/`/g, '');
+
+    // Remove surrounding quotes
+    cleaned = cleaned.replace(/^["']|["']$/g, '');
+
+    // Remove "Comment:" or similar prefixes
+    cleaned = cleaned.replace(/^(Comment|Response|Reply|Output):\s*/i, '');
+
+    // Remove leading/trailing whitespace and newlines
+    cleaned = cleaned.trim();
+
+    // If it's just "SKIP" with extra stuff, return SKIP
+    if (cleaned.toUpperCase().includes('SKIP') && cleaned.length < 20) {
+        return 'SKIP';
+    }
+
+    return cleaned;
 }
 
 async function fetchImageWithTimeout(url, timeoutMs) {
