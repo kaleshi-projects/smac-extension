@@ -1,4 +1,4 @@
-import { PLATFORMS, SELECTORS } from '../utils/dom';
+import { PLATFORMS, SELECTORS, findAndFocusInput, simulateTyping } from '../utils/dom';
 
 // State
 let processedPosts = new Set();
@@ -222,6 +222,15 @@ async function generateComment(post, platform, postId) {
                 console.log('Post:', postId);
                 console.log('Vision:', imageUrl ? 'YES' : 'NO');
                 console.log('Generated Comment:', response.comment);
+
+                // Type comment into the reply input box
+                const input = await findAndFocusInput(post, platform);
+                if (input) {
+                    simulateTyping(input, response.comment);
+                    console.log('SMAC: Comment typed into reply box!');
+                } else {
+                    console.warn('SMAC: Could not find reply input box. Comment:', response.comment);
+                }
 
                 addLog({
                     status: "SUCCESS",
