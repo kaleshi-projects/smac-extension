@@ -62,16 +62,19 @@ async function handleAnalysis(postText, imageUrl, sendResponse) {
         if (imageUrl && imageUrl.startsWith('http')) {
             console.log('SMAC: Fetching image:', imageUrl);
             try {
+                // Attempt to fetch image, but don't let it fail the whole request
                 const base64Image = await fetchImageWithTimeout(imageUrl, IMAGE_TIMEOUT_MS);
                 if (base64Image) {
                     images = [base64Image];
                     prompt = `${SYSTEM_PROMPT}\n\nAnalyze this image and text:\n${postText}\n\nComment:`;
                 }
             } catch (e) {
-                console.warn('SMAC: Image fetch failed or timed out, using text only:', e.message);
+                console.warn('SMAC: Image fetch failed or timed out, PROCEEDING WITH TEXT ONLY:', e.message);
+                // Fallback to text only prompt is already set (initial value of 'prompt')
             }
         }
 
+        console.log('SMAC: Sending request to Ollama...');
         const response = await fetch(OLLAMA_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -87,8 +90,8 @@ async function handleAnalysis(postText, imageUrl, sendResponse) {
         });
 
         if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Ollama API Error (${response.status}): ${errorText}`);
+            // Check if it's a connection error
+            throw new Error(`Ollama API Error (${response.status}). Is Ollama running?`);
         }
 
         const data = await response.json();
@@ -105,7 +108,12 @@ async function handleAnalysis(postText, imageUrl, sendResponse) {
         sendResponse({ success: true, comment: generatedText });
     } catch (error) {
         console.error('SMAC Ollama Error:', error);
-        sendResponse({ success: false, error: error.message });
+        // Differentiate between Ollama errors and others
+        let msg = error.message;
+        if (msg.includes('Failed to fetch')) {
+            msg = 'Could not connect to Ollama (localhost:11434). Is it running?';
+        }
+        sendResponse({ success: false, error: msg });
     }
 }
 

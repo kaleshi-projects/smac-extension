@@ -2,6 +2,11 @@
     "manifest_version": 3,
     "name": "SMAC Extension",
     "version": "1.0.0",
+    "icons": {
+        "16": "icon.jpg",
+        "48": "icon.jpg",
+        "128": "icon.jpg"
+    },
     "permissions": [
         "storage",
         "clipboardWrite"
