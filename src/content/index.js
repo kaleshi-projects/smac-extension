@@ -147,32 +147,47 @@ function injectButtonsIntoPosts() {
 function createSmacButton() {
     const btn = document.createElement('button');
     btn.className = 'smac-btn';
-    btn.innerText = '⚡ SMAC It';
+
+    // Icon + Text
+    btn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+        </svg>
+        <span>SMAC It</span>
+    `;
+
     btn.style.cssText = `
         position: absolute;
         top: 8px;
         right: 8px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #8B5CF6 0%, #D946EF 100%);
         color: white;
         border: none;
-        padding: 6px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: bold;
+        padding: 6px 14px;
+        border-radius: 99px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font-size: 13px;
+        font-weight: 600;
         cursor: pointer;
         z-index: 9999;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        transition: transform 0.2s, box-shadow 0.2s;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        display: flex;
+        align-items: center;
+        letter-spacing: 0.3px;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.1);
     `;
 
     btn.addEventListener('mouseenter', () => {
-        btn.style.transform = 'scale(1.05)';
-        btn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.4)';
+        btn.style.transform = 'translateY(-1px) scale(1.02)';
+        btn.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.15), 0 4px 6px -2px rgba(0, 0, 0, 0.1)';
+        btn.style.filter = 'brightness(1.1)';
     });
 
     btn.addEventListener('mouseleave', () => {
-        btn.style.transform = 'scale(1)';
-        btn.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+        btn.style.transform = 'translateY(0) scale(1)';
+        btn.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)';
+        btn.style.filter = 'brightness(1)';
     });
 
     return btn;

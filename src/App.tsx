@@ -1,7 +1,4 @@
 /// <reference types="chrome" />
-
-
-
 import { useEffect, useState } from 'react'
 
 function App() {
@@ -46,44 +43,88 @@ function App() {
   }
 
   return (
-    <div style={{ width: '320px', padding: '20px', textAlign: 'center', fontFamily: 'sans-serif' }}>
-      <h1>SMAC Extension</h1>
-
-      <div style={{ margin: '20px 0' }}>
-        <button
-          onClick={toggleExtension}
+    <div style={{ width: '360px', padding: '24px' }}>
+      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{
+            width: '40px',
+            height: '40px',
+            background: 'linear-gradient(135deg, #8B5CF6 0%, #D946EF 100%)',
+            borderRadius: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'white'
+          }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+            </svg>
+          </div>
+          <div>
+            <h1>SMAC</h1>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 500 }}>AI Social Companion</span>
+          </div>
+        </div>
+        <div
+          className={`status-dot ${isActive ? 'active' : 'inactive'}`}
           style={{
-            padding: '10px 20px',
-            fontSize: '16px',
-            cursor: 'pointer',
-            backgroundColor: isActive ? '#ff4d4f' : '#33cc33',  // Red for STOP, Green for START
-            color: 'white',
-            border: 'none',
-            borderRadius: '5px',
-            fontWeight: 'bold',
-            width: '100%'
+            background: isActive ? 'var(--success)' : 'var(--text-secondary)',
+            boxShadow: isActive ? '0 0 12px var(--success)' : 'none'
           }}
-        >
-          {isActive ? 'STOP EXTENSION' : 'START EXTENSION'}
-        </button>
-      </div>
+        />
+      </header>
 
-      <p>Status: <strong>{isActive ? 'Active (Simulation Mode)' : 'Inactive'}</strong></p>
+      <main>
+        <div className="card" style={{ textAlign: 'center', marginBottom: '20px' }}>
+          <p style={{ margin: '0 0 16px 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            {isActive
+              ? 'Extension is active and monitoring posts.'
+              : 'Extension is paused.'}
+          </p>
 
-      <div style={{ marginTop: '15px', padding: '10px', background: '#f0f0f0', borderRadius: '5px', fontSize: '12px' }}>
-        {isActive ? 'Monitoring social media posts...' : 'Extension is paused.'}
-      </div>
+          <button
+            onClick={toggleExtension}
+            className={isActive ? 'btn-secondary' : 'btn-primary'}
+            style={{ width: '100%', justifyContent: 'center' }}
+          >
+            {isActive ? 'Pause Extension' : 'Activate SMAC'}
+          </button>
+        </div>
 
-      <div style={{ marginTop: '20px', display: 'flex', gap: '10px', justifyContent: 'center' }}>
-        <button onClick={exportLogs} disabled={logs.length === 0} style={{ padding: '8px', cursor: 'pointer' }}>Export Logs ({logs.length})</button>
-        <button onClick={clearLogs} disabled={logs.length === 0} style={{ padding: '8px', cursor: 'pointer' }}>Clear Logs</button>
-      </div>
-      <p style={{ fontSize: '10px', color: '#999', marginTop: '10px' }}>
-        Ollama: localhost:11434
-      </p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <button
+            onClick={exportLogs}
+            disabled={logs.length === 0}
+            className="btn-secondary"
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', padding: '12px' }}
+          >
+            <span style={{ fontSize: '1.2rem', fontWeight: 700, color: 'white' }}>{logs.length}</span>
+            <span>Export Logs</span>
+          </button>
+
+          <button
+            onClick={clearLogs}
+            disabled={logs.length === 0}
+            className="btn-secondary"
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', padding: '12px' }}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7 }}>
+              <path d="M3 6h18"></path>
+              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+            </svg>
+            <span>Clear History</span>
+          </button>
+        </div>
+      </main>
+
+      <footer style={{ marginTop: '24px', textAlign: 'center' }}>
+        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>
+          Powered by Ollama (Llama 3.2 locally)
+        </p>
+      </footer>
     </div>
   )
 }
-
 
 export default App
