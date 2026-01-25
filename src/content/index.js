@@ -1,30 +1,25 @@
-import { PLATFORMS, SELECTORS, findAndFocusInput, simulateTyping } from '../utils/dom';
+import { PLATFORMS, SELECTORS } from '../utils/dom';
 
 // State
-let processedPosts = new Set();
 let isActive = false;
 
 // Initialize
 (async () => {
     await loadSettings();
-    console.log('SMAC Extension: Content Script Loaded. Initial State:', isActive ? 'ACTIVE' : 'INACTIVE');
+    console.log('SMAC Extension: Content Script Loaded. State:', isActive ? 'ACTIVE' : 'INACTIVE');
     if (isActive) {
         startObserver();
     }
 })();
 
 async function loadSettings() {
-    const result = await chrome.storage.local.get(['processedPosts', 'isActive']);
-    if (result.processedPosts) {
-        processedPosts = new Set(result.processedPosts);
-    }
+    const result = await chrome.storage.local.get(['isActive']);
     isActive = !!result.isActive;
 
     chrome.storage.onChanged.addListener((changes, namespace) => {
         if (namespace === 'local' && changes.isActive) {
             isActive = changes.isActive.newValue;
             console.log(`SMAC Extension is now ${isActive ? 'ACTIVE' : 'INACTIVE'}`);
-
             if (isActive) {
                 startObserver();
             }
@@ -32,69 +27,10 @@ async function loadSettings() {
     });
 }
 
-async function saveProcessedPost(id) {
-    processedPosts.add(id);
-    await chrome.storage.local.set({ processedPosts: Array.from(processedPosts) });
-}
-
 function getPlatform() {
     const host = window.location.hostname;
     if (host.includes('twitter.com') || host.includes('x.com')) return PLATFORMS.X;
     return null;
-}
-
-// Show helper tooltip to guide user
-function showReplyHelper() {
-    console.log('SMAC: Showing reply helper tooltip');
-
-    // Remove any existing helper
-    const existing = document.querySelector('.smac-reply-helper');
-    if (existing) existing.remove();
-
-    const helper = document.createElement('div');
-    helper.className = 'smac-reply-helper';
-    helper.innerHTML = '💡 Press <kbd>Space</kbd> or any key to enable Reply';
-    helper.style.cssText = `
-        position: fixed;
-        bottom: 100px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 14px 24px;
-        border-radius: 30px;
-        font-size: 15px;
-        font-weight: 600;
-        z-index: 2147483647;
-        box-shadow: 0 6px 30px rgba(0,0,0,0.4);
-        animation: smac-fade-in 0.3s ease;
-        border: 2px solid rgba(255,255,255,0.3);
-    `;
-
-    // Add kbd styling
-    const style = document.createElement('style');
-    style.textContent = `
-        @keyframes smac-fade-in {
-            from { opacity: 0; transform: translateX(-50%) translateY(20px); }
-            to { opacity: 1; transform: translateX(-50%) translateY(0); }
-        }
-        .smac-reply-helper kbd {
-            background: rgba(255,255,255,0.25);
-            padding: 3px 10px;
-            border-radius: 5px;
-            margin: 0 4px;
-            font-weight: bold;
-        }
-    `;
-    document.head.appendChild(style);
-    document.body.appendChild(helper);
-
-    // Auto-remove after 8 seconds
-    setTimeout(() => {
-        helper.style.transition = 'opacity 0.5s ease';
-        helper.style.opacity = '0';
-        setTimeout(() => helper.remove(), 500);
-    }, 8000);
 }
 
 function debounce(func, wait) {
@@ -111,24 +47,27 @@ function startObserver() {
     const platform = getPlatform();
     if (!platform) return;
 
-    const debouncedCheck = debounce(() => {
+    // Inject buttons into existing posts
+    injectButtonsIntoPosts(platform);
+
+    // Watch for new posts using MutationObserver
+    const debouncedInject = debounce(() => {
         if (!isActive) return;
-        addButtonsToPosts(platform);
-    }, 1000);
+        injectButtonsIntoPosts(platform);
+    }, 500);
 
     const observer = new MutationObserver((mutations) => {
         if (!isActive) return;
         if (mutations.some(m => m.addedNodes.length > 0)) {
-            debouncedCheck();
+            debouncedInject();
         }
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-    if (isActive) addButtonsToPosts(platform);
 }
 
-// Add SMAC button to each post
-function addButtonsToPosts(platform) {
+// Inject "⚡ SMAC It" button into action bar of every post
+function injectButtonsIntoPosts(platform) {
     if (!isActive) return;
     if (!chrome.runtime?.id) return;
 
@@ -136,19 +75,16 @@ function addButtonsToPosts(platform) {
     const posts = document.querySelectorAll(selector);
 
     posts.forEach((post) => {
-        // Skip if button already added
+        // Skip if button already injected
         if (post.querySelector('.smac-btn')) return;
-
-        let postId = getPostId(post, platform);
-        if (!postId) return;
 
         // Skip video/audio posts
         if (hasMediaContent(post)) return;
 
-        // Create SMAC button
+        // Create "SMAC It" button
         const btn = document.createElement('button');
         btn.className = 'smac-btn';
-        btn.innerText = '🤖 SMAC';
+        btn.innerText = '⚡ SMAC It';
         btn.style.cssText = `
             position: absolute;
             top: 8px;
@@ -176,69 +112,58 @@ function addButtonsToPosts(platform) {
             btn.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
         });
 
+        // Click handler: Analyze post -> Console log + Clipboard copy
         btn.addEventListener('click', async (e) => {
             e.preventDefault();
             e.stopPropagation();
+
             btn.innerText = '⏳ Thinking...';
             btn.disabled = true;
-            await generateComment(post, platform, postId);
-            btn.innerText = '✅ Done';
+
+            try {
+                const comment = await analyzeAndGenerateComment(post, platform);
+
+                if (comment) {
+                    // Output 1: Console log
+                    console.log('=== SMAC Generated Comment ===');
+                    console.log(comment);
+
+                    // Output 2: Copy to clipboard
+                    await navigator.clipboard.writeText(comment);
+
+                    // Visual feedback
+                    btn.innerText = '✅ Copied!';
+                } else {
+                    btn.innerText = '❌ Skipped';
+                }
+            } catch (err) {
+                console.error('SMAC Error:', err);
+                btn.innerText = '❌ Error';
+            }
+
+            // Reset button after 2 seconds
             setTimeout(() => {
-                btn.innerText = '🤖 SMAC';
+                btn.innerText = '⚡ SMAC It';
                 btn.disabled = false;
             }, 2000);
         });
 
-        // Make post relative for absolute positioning
+        // Ensure post has relative positioning for absolute button placement
         post.style.position = 'relative';
         post.appendChild(btn);
     });
 }
 
 function hasMediaContent(post) {
-    const hasVideo = post.querySelector('video') !== null;
-    const hasAudioSpace = post.querySelector('[data-testid="audioSpace"]') !== null;
-    const hasVoiceNote = post.querySelector('[data-testid="voiceRecording"]') !== null;
-    const hasVideoPlayer = post.querySelector('[data-testid="videoPlayer"]') !== null;
-    const hasVideoComponent = post.querySelector('[data-testid="videoComponent"]') !== null;
-    return hasVideo || hasAudioSpace || hasVoiceNote || hasVideoPlayer || hasVideoComponent;
+    return post.querySelector('video') !== null ||
+        post.querySelector('[data-testid="audioSpace"]') !== null ||
+        post.querySelector('[data-testid="voiceRecording"]') !== null ||
+        post.querySelector('[data-testid="videoPlayer"]') !== null ||
+        post.querySelector('[data-testid="videoComponent"]') !== null;
 }
 
-function getPostId(post, platform) {
-    try {
-        if (platform === PLATFORMS.X) {
-            const timeLink = post.querySelector('time')?.closest('a');
-            if (timeLink) return timeLink.href;
-        }
-    } catch (e) {
-        return null;
-    }
-    return null;
-}
-
-function isInViewport(element) {
-    try {
-        const rect = element.getBoundingClientRect();
-        return (
-            rect.top >= 0 &&
-            rect.left >= 0 &&
-            rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
-            rect.right <= (window.innerWidth || document.documentElement.clientWidth)
-        );
-    } catch (e) { return false; }
-}
-
-async function addLog(entry) {
-    try {
-        const result = await chrome.storage.local.get(['smacLogs']);
-        const logs = result.smacLogs || [];
-        if (logs.length > 100) logs.shift();
-        logs.push({ timestamp: new Date().toISOString(), ...entry });
-        await chrome.storage.local.set({ smacLogs: logs });
-    } catch (e) { }
-}
-
-async function generateComment(post, platform, postId) {
+// Analyze post and return generated comment (or null if skipped)
+async function analyzeAndGenerateComment(post, platform) {
     const selector = SELECTORS[platform];
     const textEl = post.querySelector(selector.text);
     const imageEl = post.querySelector(selector.image);
@@ -250,64 +175,29 @@ async function generateComment(post, platform, postId) {
 
     if (!textEl && !imageUrl) {
         console.log('SMAC: No content to analyze');
-        return;
+        return null;
     }
 
     const text = textEl ? textEl.innerText : "";
 
-    try {
-        if (!chrome.runtime?.id) return;
+    if (!chrome.runtime?.id) return null;
 
-        const response = await chrome.runtime.sendMessage({
-            action: 'ANALYZE_POST',
-            text,
-            imageUrl
-        });
+    const response = await chrome.runtime.sendMessage({
+        action: 'ANALYZE_POST',
+        text,
+        imageUrl
+    });
 
-        if (response && response.success) {
-            if (response.comment === 'SKIP') {
-                console.log('=== SMAC AI ===');
-                console.log('Post:', postId);
-                console.log('Result: SKIPPED (not tech-related)');
-            } else {
-                post.style.border = '2px solid #1DA1F2';
-
-                console.log('=== SMAC AI ===');
-                console.log('Post:', postId);
-                console.log('Vision:', imageUrl ? 'YES' : 'NO');
-                console.log('Generated Comment:', response.comment);
-
-                // Type comment into the reply input box
-                const input = await findAndFocusInput(post, platform);
-                if (input) {
-                    await simulateTyping(input, response.comment);
-                    console.log('SMAC: Comment typed into reply box!');
-
-                    // Show helper tooltip
-                    try {
-                        console.log('SMAC: About to show reply helper...');
-                        showReplyHelper();
-                        console.log('SMAC: Reply helper tooltip displayed');
-                    } catch (tooltipErr) {
-                        console.error('SMAC: Tooltip error:', tooltipErr);
-                    }
-                } else {
-                    console.warn('SMAC: Could not find reply input box. Comment:', response.comment);
-                }
-
-                addLog({
-                    status: "SUCCESS",
-                    post_url: postId,
-                    vision: !!imageUrl,
-                    comment: response.comment,
-                });
-            }
-        } else if (response?.error) {
-            console.error('SMAC Analysis failed:', response.error);
+    if (response && response.success) {
+        if (response.comment === 'SKIP') {
+            console.log('SMAC: Post skipped (not tech-related)');
+            return null;
         }
-    } catch (err) {
-        if (!err.message.includes('Extension context invalidated') && !err.message.includes('Receiving end does not exist')) {
-            console.error('SMAC Message error:', err);
-        }
+        return response.comment;
+    } else if (response?.error) {
+        console.error('SMAC Analysis failed:', response.error);
+        return null;
     }
+
+    return null;
 }
