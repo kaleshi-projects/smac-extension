@@ -3,13 +3,16 @@
     "name": "SMAC Extension",
     "version": "1.0.0",
     "permissions": [
-        "storage"
+        "storage",
+        "clipboardWrite"
     ],
     "host_permissions": [
         "http://localhost:11434/*",
         "https://*.x.com/*",
         "https://*.twitter.com/*",
-        "https://*.twimg.com/*"
+        "https://*.twimg.com/*",
+        "https://*.linkedin.com/*",
+        "https://*.licdn.com/*"
     ],
     "background": {
         "service_worker": "src/background/index.js",
@@ -19,7 +22,8 @@
         {
             "matches": [
                 "*://*.twitter.com/*",
-                "*://*.x.com/*"
+                "*://*.x.com/*",
+                "*://*.linkedin.com/*"
             ],
             "js": [
                 "src/content/index.js"
@@ -34,7 +38,8 @@
             ],
             "matches": [
                 "*://*.twitter.com/*",
-                "*://*.x.com/*"
+                "*://*.x.com/*",
+                "*://*.linkedin.com/*"
             ]
         }
     ],

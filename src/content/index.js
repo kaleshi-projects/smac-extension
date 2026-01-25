@@ -1,12 +1,19 @@
-import { PLATFORMS, SELECTORS } from '../utils/dom';
+import { PLATFORMS, SELECTORS, detectPlatform } from '../utils/dom';
 
 // State
 let isActive = false;
+let currentPlatform = null;
 
 // Initialize
 (async () => {
+    currentPlatform = detectPlatform();
+    if (!currentPlatform) {
+        console.log('SMAC: Unsupported platform');
+        return;
+    }
+
     await loadSettings();
-    console.log('SMAC Extension: Content Script Loaded. State:', isActive ? 'ACTIVE' : 'INACTIVE');
+    console.log(`SMAC Extension: Loaded on ${currentPlatform.toUpperCase()}. State: ${isActive ? 'ACTIVE' : 'INACTIVE'}`);
     if (isActive) {
         startObserver();
     }
@@ -20,17 +27,11 @@ async function loadSettings() {
         if (namespace === 'local' && changes.isActive) {
             isActive = changes.isActive.newValue;
             console.log(`SMAC Extension is now ${isActive ? 'ACTIVE' : 'INACTIVE'}`);
-            if (isActive) {
+            if (isActive && currentPlatform) {
                 startObserver();
             }
         }
     });
-}
-
-function getPlatform() {
-    const host = window.location.hostname;
-    if (host.includes('twitter.com') || host.includes('x.com')) return PLATFORMS.X;
-    return null;
 }
 
 function debounce(func, wait) {
@@ -42,18 +43,15 @@ function debounce(func, wait) {
 }
 
 function startObserver() {
-    if (!isActive) return;
-
-    const platform = getPlatform();
-    if (!platform) return;
+    if (!isActive || !currentPlatform) return;
 
     // Inject buttons into existing posts
-    injectButtonsIntoPosts(platform);
+    injectButtonsIntoPosts();
 
     // Watch for new posts using MutationObserver
     const debouncedInject = debounce(() => {
         if (!isActive) return;
-        injectButtonsIntoPosts(platform);
+        injectButtonsIntoPosts();
     }, 500);
 
     const observer = new MutationObserver((mutations) => {
@@ -66,51 +64,32 @@ function startObserver() {
     observer.observe(document.body, { childList: true, subtree: true });
 }
 
-// Inject "⚡ SMAC It" button into action bar of every post
-function injectButtonsIntoPosts(platform) {
-    if (!isActive) return;
+// Inject "⚡ SMAC It" button into posts
+function injectButtonsIntoPosts() {
+    if (!isActive || !currentPlatform) return;
     if (!chrome.runtime?.id) return;
 
-    const selector = SELECTORS[platform].post;
-    const posts = document.querySelectorAll(selector);
+    const config = SELECTORS[currentPlatform];
+    const posts = document.querySelectorAll(config.post);
 
     posts.forEach((post) => {
         // Skip if button already injected
         if (post.querySelector('.smac-btn')) return;
 
-        // Skip video/audio posts
-        if (hasMediaContent(post)) return;
+        // Skip video/audio posts (X-specific)
+        if (currentPlatform === PLATFORMS.X && hasMediaContent(post)) return;
+
+        // For LinkedIn, wait for action bar to be available
+        if (currentPlatform === PLATFORMS.LINKEDIN) {
+            const actionBar = post.querySelector(config.actionBar);
+            if (!actionBar) {
+                // Action bar not loaded yet, will be caught on next mutation
+                return;
+            }
+        }
 
         // Create "SMAC It" button
-        const btn = document.createElement('button');
-        btn.className = 'smac-btn';
-        btn.innerText = '⚡ SMAC It';
-        btn.style.cssText = `
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: bold;
-            cursor: pointer;
-            z-index: 9999;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-            transition: transform 0.2s, box-shadow 0.2s;
-        `;
-
-        btn.addEventListener('mouseenter', () => {
-            btn.style.transform = 'scale(1.05)';
-            btn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.4)';
-        });
-
-        btn.addEventListener('mouseleave', () => {
-            btn.style.transform = 'scale(1)';
-            btn.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
-        });
+        const btn = createSmacButton();
 
         // Click handler: Analyze post -> Console log + Clipboard copy
         btn.addEventListener('click', async (e) => {
@@ -121,7 +100,7 @@ function injectButtonsIntoPosts(platform) {
             btn.disabled = true;
 
             try {
-                const comment = await analyzeAndGenerateComment(post, platform);
+                const comment = await analyzeAndGenerateComment(post);
 
                 if (comment) {
                     // Output 1: Console log
@@ -148,10 +127,55 @@ function injectButtonsIntoPosts(platform) {
             }, 2000);
         });
 
-        // Ensure post has relative positioning for absolute button placement
-        post.style.position = 'relative';
-        post.appendChild(btn);
+        // Inject button based on platform
+        if (currentPlatform === PLATFORMS.X) {
+            // X: Absolute positioning in top-right of post
+            post.style.position = 'relative';
+            post.appendChild(btn);
+        } else if (currentPlatform === PLATFORMS.LINKEDIN) {
+            // LinkedIn: Insert as first child of action bar
+            const actionBar = post.querySelector(config.actionBar);
+            if (actionBar) {
+                btn.style.position = 'relative';
+                btn.style.marginRight = '8px';
+                actionBar.insertBefore(btn, actionBar.firstChild);
+            }
+        }
     });
+}
+
+function createSmacButton() {
+    const btn = document.createElement('button');
+    btn.className = 'smac-btn';
+    btn.innerText = '⚡ SMAC It';
+    btn.style.cssText = `
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: bold;
+        cursor: pointer;
+        z-index: 9999;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        transition: transform 0.2s, box-shadow 0.2s;
+    `;
+
+    btn.addEventListener('mouseenter', () => {
+        btn.style.transform = 'scale(1.05)';
+        btn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.4)';
+    });
+
+    btn.addEventListener('mouseleave', () => {
+        btn.style.transform = 'scale(1)';
+        btn.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+    });
+
+    return btn;
 }
 
 function hasMediaContent(post) {
@@ -163,10 +187,10 @@ function hasMediaContent(post) {
 }
 
 // Analyze post and return generated comment (or null if skipped)
-async function analyzeAndGenerateComment(post, platform) {
-    const selector = SELECTORS[platform];
-    const textEl = post.querySelector(selector.text);
-    const imageEl = post.querySelector(selector.image);
+async function analyzeAndGenerateComment(post) {
+    const config = SELECTORS[currentPlatform];
+    const textEl = post.querySelector(config.text);
+    const imageEl = post.querySelector(config.image);
     let imageUrl = imageEl ? imageEl.src : null;
 
     if (imageUrl && !imageUrl.startsWith('http')) {
