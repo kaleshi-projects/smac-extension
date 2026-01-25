@@ -43,6 +43,60 @@ function getPlatform() {
     return null;
 }
 
+// Show helper tooltip to guide user
+function showReplyHelper() {
+    console.log('SMAC: Showing reply helper tooltip');
+
+    // Remove any existing helper
+    const existing = document.querySelector('.smac-reply-helper');
+    if (existing) existing.remove();
+
+    const helper = document.createElement('div');
+    helper.className = 'smac-reply-helper';
+    helper.innerHTML = '💡 Press <kbd>Space</kbd> or any key to enable Reply';
+    helper.style.cssText = `
+        position: fixed;
+        bottom: 100px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 14px 24px;
+        border-radius: 30px;
+        font-size: 15px;
+        font-weight: 600;
+        z-index: 2147483647;
+        box-shadow: 0 6px 30px rgba(0,0,0,0.4);
+        animation: smac-fade-in 0.3s ease;
+        border: 2px solid rgba(255,255,255,0.3);
+    `;
+
+    // Add kbd styling
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes smac-fade-in {
+            from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+            to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+        .smac-reply-helper kbd {
+            background: rgba(255,255,255,0.25);
+            padding: 3px 10px;
+            border-radius: 5px;
+            margin: 0 4px;
+            font-weight: bold;
+        }
+    `;
+    document.head.appendChild(style);
+    document.body.appendChild(helper);
+
+    // Auto-remove after 8 seconds
+    setTimeout(() => {
+        helper.style.transition = 'opacity 0.5s ease';
+        helper.style.opacity = '0';
+        setTimeout(() => helper.remove(), 500);
+    }, 8000);
+}
+
 function debounce(func, wait) {
     let timeout;
     return function (...args) {
@@ -226,8 +280,17 @@ async function generateComment(post, platform, postId) {
                 // Type comment into the reply input box
                 const input = await findAndFocusInput(post, platform);
                 if (input) {
-                    simulateTyping(input, response.comment);
+                    await simulateTyping(input, response.comment);
                     console.log('SMAC: Comment typed into reply box!');
+
+                    // Show helper tooltip
+                    try {
+                        console.log('SMAC: About to show reply helper...');
+                        showReplyHelper();
+                        console.log('SMAC: Reply helper tooltip displayed');
+                    } catch (tooltipErr) {
+                        console.error('SMAC: Tooltip error:', tooltipErr);
+                    }
                 } else {
                     console.warn('SMAC: Could not find reply input box. Comment:', response.comment);
                 }

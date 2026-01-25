@@ -113,7 +113,10 @@ async function handleAnalysis(postText, imageUrl, sendResponse) {
 function cleanResponse(text) {
     if (!text) return 'SKIP';
 
-    let cleaned = text;
+    let cleaned = text.trim();
+
+    // If just SKIP, return early
+    if (cleaned.toUpperCase() === 'SKIP') return 'SKIP';
 
     // Remove code blocks with language specifier
     cleaned = cleaned.replace(/```[\w]*\n?/g, '');
@@ -122,17 +125,29 @@ function cleanResponse(text) {
     // Remove inline code backticks
     cleaned = cleaned.replace(/`/g, '');
 
-    // Remove surrounding quotes
-    cleaned = cleaned.replace(/^["']|["']$/g, '');
-
     // Remove "Comment:" or similar prefixes
     cleaned = cleaned.replace(/^(Comment|Response|Reply|Output):\s*/i, '');
+
+    // Remove trailing "SKIP" or "Skip" (sometimes AI adds SKIP at end)
+    cleaned = cleaned.replace(/[\s.,;:!"']*[Ss][Kk][Ii][Pp][\s.,;:!"']*$/g, '');
+    cleaned = cleaned.replace(/\s+Skip\s*$/gi, '');
+    cleaned = cleaned.replace(/\.\s*Skip\s*$/gi, '.');
+
+    // Remove leading "Skip" (sometimes AI puts Skip at start)
+    cleaned = cleaned.replace(/^Skip\s+/gi, '');
+    cleaned = cleaned.replace(/^SKIP\s+/gi, '');
+
+    // Remove all types of surrounding quotes (multiple passes)
+    cleaned = cleaned.trim();
+    cleaned = cleaned.replace(/^["'"'"'`]+|["'"'"'`]+$/g, '');
+    cleaned = cleaned.trim();
+    cleaned = cleaned.replace(/^["'"'"'`]+|["'"'"'`]+$/g, '');
 
     // Remove leading/trailing whitespace and newlines
     cleaned = cleaned.trim();
 
-    // If it's just "SKIP" with extra stuff, return SKIP
-    if (cleaned.toUpperCase().includes('SKIP') && cleaned.length < 20) {
+    // If mostly empty after cleanup, return SKIP
+    if (!cleaned || cleaned.length < 5) {
         return 'SKIP';
     }
 

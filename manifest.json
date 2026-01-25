@@ -27,6 +27,17 @@
             "run_at": "document_idle"
         }
     ],
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "src/utils/injected.js"
+            ],
+            "matches": [
+                "*://*.twitter.com/*",
+                "*://*.x.com/*"
+            ]
+        }
+    ],
     "action": {
         "default_popup": "index.html"
     }

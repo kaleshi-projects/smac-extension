@@ -45,95 +45,57 @@ export async function simulateTyping(element, text) {
         editableEl = element.closest('[contenteditable="true"]') || element;
     }
 
+    // Phase 1: Focus and key interaction simulation
     editableEl.focus();
-
-    // Clear existing content
-    while (editableEl.firstChild) {
-        editableEl.removeChild(editableEl.firstChild);
-    }
-
-    // Type character by character with proper React events
-    for (const char of text) {
-        // Set selection at end
-        const sel = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(editableEl);
-        range.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(range);
-
-        // beforeinput event (React 17+ listens to this)
-        const beforeInputEvent = new InputEvent('beforeinput', {
-            bubbles: true,
-            cancelable: true,
-            inputType: 'insertText',
-            data: char,
-        });
-        editableEl.dispatchEvent(beforeInputEvent);
-
-        // Insert character manually
-        const textNode = document.createTextNode(char);
-        if (editableEl.lastChild && editableEl.lastChild.nodeType === Node.TEXT_NODE) {
-            editableEl.lastChild.textContent += char;
-        } else {
-            editableEl.appendChild(textNode);
-        }
-
-        // input event
-        const inputEvent = new InputEvent('input', {
-            bubbles: true,
-            cancelable: false,
-            inputType: 'insertText',
-            data: char,
-        });
-        editableEl.dispatchEvent(inputEvent);
-
-        // Small delay
-        await new Promise(r => setTimeout(r, 3));
-    }
-
-    // Final events to trigger React reconciliation
-    editableEl.dispatchEvent(new Event('change', { bubbles: true }));
-
-    // Click inside to ensure focus
-    const clickEvent = new MouseEvent('click', {
-        bubbles: true,
-        cancelable: true,
-        view: window
-    });
-    editableEl.dispatchEvent(clickEvent);
-
-    // Add a space at the end and delete it (trick to trigger state update)
+    editableEl.click();
     await new Promise(r => setTimeout(r, 100));
 
-    const spaceEvent = new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'insertText',
-        data: ' ',
-    });
-    editableEl.dispatchEvent(spaceEvent);
-    editableEl.textContent = editableEl.textContent + ' ';
-    editableEl.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        inputType: 'insertText',
-        data: ' ',
-    }));
+    // Phase 2: Visual update using execCommand
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editableEl);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.execCommand('delete', false, null);
 
+    document.execCommand('insertText', false, text);
+
+    // Give the visual update a moment to settle
+    await new Promise(r => setTimeout(r, 100));
+
+    // Phase 3: MAIN WORLD INJECTION to trigger React state
+    // This code runs inside the page context via src injection (CSP compliant)
+    console.log('SMAC: Starting Main World injection via src file');
+
+    // Pass data via DOM attribute
+    document.body.setAttribute('data-smac-text', text);
+
+    // Create script tag pointing to our web accessible resource
+    const script = document.createElement('script');
+    script.src = chrome.runtime.getURL('src/utils/injected.js');
+
+    // Setup cleanup listener
+    script.onload = function () {
+        console.log('SMAC: Injected script loaded');
+        this.remove();
+    };
+
+    (document.head || document.documentElement).appendChild(script);
+
+    // Wait slightly for injection to execute
+    await new Promise(r => setTimeout(r, 200));
+
+    // Final cleanup: set cursor to end and blur/focus
+    editableEl.blur();
     await new Promise(r => setTimeout(r, 50));
+    editableEl.focus();
 
-    // Delete the space
-    const deleteEvent = new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'deleteContentBackward',
-    });
-    editableEl.dispatchEvent(deleteEvent);
-    editableEl.textContent = editableEl.textContent.slice(0, -1);
-    editableEl.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        inputType: 'deleteContentBackward',
-    }));
+    // Set cursor to end
+    const endRange = document.createRange();
+    endRange.selectNodeContents(editableEl);
+    endRange.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(endRange);
 
-    console.log('SMAC: Typing simulation complete');
+    console.log('SMAC: Advanced typing simulation complete');
 }
