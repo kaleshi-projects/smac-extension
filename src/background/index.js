@@ -6,7 +6,7 @@ const MODEL_NAME = 'gpt-4o-mini';
 const IMAGE_TIMEOUT_MS = 5000;
 const MAX_COMMENT_LENGTH = 280; // Twitter character limit
 
-const SYSTEM_PROMPT = `Role: You are a highly experienced Senior Software Engineer trapped in the body of a 2nd-year College Student. 
+const SYSTEM_PROMPT = `Role: You are a highly experienced Senior Software Engineer trapped in the body of a 2nd-year College Student.
 Vibe: You have 10+ years of deep technical knowledge (System Design, Scalability, Low-level logic), but you speak casually like a Gen-Z coder. You are "The Prodigy."
 
 Task: Write a comment on this social media post.
@@ -36,6 +36,62 @@ EXAMPLES:
 SKIP RULE: If the post is a selfie without tech context, motivational quote, politics, or spam -> output exactly: SKIP
 Output ONLY the comment OR SKIP. No quotes, no markdown, no explanations.`;
 
+const PROFILE_CONVERSATION_PROMPT = `Role: You are Shakil Ahmad — a 2nd-year CSE student who is a full stack developer, web3 builder, app developer (React Native), AI-ML explorer, DevOps practitioner, and cybersecurity enthusiast.
+
+About Shakil:
+- Hobbies: teaching juniors, building side projects, learning new tech relentlessly
+- Personality: respectful, friendly, genuinely curious, hustler energy, hardworking, technically deep but never arrogant
+- Communication style: human-like, casual but respectful, never robotic or salesy
+
+Task: Given a person's profile data, write a personalized first message to start a genuine connection.
+
+STRICT OUTPUT RULES:
+- Output ONLY plain text. NO markdown, NO code blocks, NO backticks, NO quotes.
+- Keep the message between 100-400 characters.
+- Just write the message directly. Nothing else.
+
+CORE PRINCIPLES:
+1. Reference something SPECIFIC from their profile — a project, role, skill, or post. Generic flattery is banned.
+2. Show you actually looked at their profile. Cite specific details.
+3. Find COMMON GROUND: if they work with React, mention your React Native experience. If they do AI, mention your AI-ML work. If they teach, mention your love for teaching juniors. If they do DevOps, mention your DevOps work. If they do security, mention cybersecurity.
+4. Show you are a hustler who does a lot of hard work and has very good knowledge of tech, especially in their field.
+5. End with an open question or soft ask — "would love to hear your take on X" or "been exploring Y myself, any tips?"
+6. DO NOT ask to "pick their brain" or "grab coffee". DO NOT use words: "commendable", "inspiring", "journey", "landscape", "excited to connect", "resonate", "kudos".
+7. Sound like a sharp, technically literate student reaching out — NOT a LinkedIn bot.
+8. The message must feel like a real human wrote it, not an AI.
+
+STRUCTURE:
+- 1 sentence acknowledging something specific about them
+- 1 sentence connecting it to your own work/interests
+- 1 sentence with a genuine question or soft conversation opener
+
+Output ONLY the message. No quotes, no markdown, no explanations.`;
+
+const MESSAGING_REPLY_PROMPT = `Role: You are Shakil Ahmad — a 2nd-year CSE student who is a full stack developer, web3 builder, app developer (React Native), AI-ML explorer, DevOps practitioner, and cybersecurity enthusiast.
+
+About Shakil:
+- Hobbies: teaching juniors, building projects, always learning new tech
+- Personality: respectful, friendly, genuinely curious, hustler energy, hardworking
+- Communication style: human-like, casual, matches the energy of the conversation
+
+Task: Given the last messages in a conversation, generate the perfect next reply from Shakil.
+
+STRICT OUTPUT RULES:
+- Output ONLY plain text. NO markdown, NO code blocks, NO backticks, NO quotes.
+- Keep the reply under 500 characters.
+- Just write the reply directly. Nothing else.
+
+CORE PRINCIPLES:
+1. READ THE ROOM: Match the conversation's tone and energy. If they're casual, be casual. If technical, be technical. If formal, be slightly formal but still friendly.
+2. CONTINUE THE THREAD: Reply must logically follow from the last message. Don't change the subject randomly.
+3. ADD VALUE: Either answer their question, ask a thoughtful follow-up, share relevant experience, or move the conversation forward.
+4. BE HUMAN: Use natural language. Okay to use abbreviations, informal grammar if the conversation is casual. Use "haha", "tbh", "ngl" naturally if the vibe is casual.
+5. NO BOT WORDS: Banned: "absolutely", "definitely", "I'd be happy to", "that's great", "sounds good" (as full responses), "commendable", "insightful", "I appreciate".
+6. Show genuine interest and technical depth when appropriate.
+7. The reply must feel like a real human typed it, not an AI.
+
+Output ONLY the reply. No quotes, no markdown, no explanations.`;
+
 // Reset state on install/startup
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.local.set({ isActive: false });
@@ -50,6 +106,14 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'ANALYZE_POST') {
         handleAnalysis(request.text, request.imageUrl, sendResponse);
+        return true;
+    }
+    if (request.action === 'ANALYZE_PROFILE') {
+        handleProfileAnalysis(request.profileData, sendResponse);
+        return true;
+    }
+    if (request.action === 'ANALYZE_CONVERSATION') {
+        handleConversationAnalysis(request.messages, sendResponse);
         return true;
     }
 });
@@ -218,5 +282,127 @@ async function fetchImageWithTimeout(url, timeoutMs) {
             throw new Error('Image fetch timed out');
         }
         throw error;
+    }
+}
+
+async function handleProfileAnalysis(profileData, sendResponse) {
+    try {
+        const apiKey = await getApiKey();
+        if (!apiKey) {
+            sendResponse({ success: false, error: 'OpenAI API key not set. Open the SMAC popup and add your key in Settings.' });
+            return;
+        }
+
+        const messages = [
+            { role: 'system', content: PROFILE_CONVERSATION_PROMPT },
+            { role: 'user', content: `Profile Data:\n${JSON.stringify(profileData, null, 2)}\n\nWrite a personalized first message:` }
+        ];
+
+        console.log('SMAC: Sending profile analysis to OpenAI...');
+        const response = await fetch(OPENAI_API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: MODEL_NAME,
+                messages,
+                max_tokens: 200
+            }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => null);
+            const errorMsg = errorData?.error?.message || `API Error (${response.status})`;
+            if (response.status === 401) {
+                throw new Error('Invalid OpenAI API key. Check your key in SMAC Settings.');
+            }
+            if (response.status === 429) {
+                throw new Error('OpenAI rate limit exceeded. Try again in a moment.');
+            }
+            throw new Error(errorMsg);
+        }
+
+        const data = await response.json();
+        let generatedText = data.choices?.[0]?.message?.content?.trim() || '';
+        generatedText = cleanResponse(generatedText);
+
+        if (!generatedText || generatedText === 'SKIP' || generatedText.length < 10) {
+            sendResponse({ success: false, error: 'Could not generate a meaningful message.' });
+            return;
+        }
+
+        sendResponse({ success: true, message: generatedText });
+    } catch (error) {
+        console.error('SMAC Profile Analysis Error:', error);
+        let msg = error.message;
+        if (msg.includes('Failed to fetch')) {
+            msg = 'Could not connect to OpenAI API. Check your internet connection.';
+        }
+        sendResponse({ success: false, error: msg });
+    }
+}
+
+async function handleConversationAnalysis(conversationMessages, sendResponse) {
+    try {
+        const apiKey = await getApiKey();
+        if (!apiKey) {
+            sendResponse({ success: false, error: 'OpenAI API key not set. Open the SMAC popup and add your key in Settings.' });
+            return;
+        }
+
+        const formattedMessages = conversationMessages
+            .map(m => `${m.sender}: ${m.text}`)
+            .join('\n');
+
+        const messages = [
+            { role: 'system', content: MESSAGING_REPLY_PROMPT },
+            { role: 'user', content: `Conversation (last ${conversationMessages.length} messages):\n${formattedMessages}\n\nWrite Shakil's next reply:` }
+        ];
+
+        console.log('SMAC: Sending conversation analysis to OpenAI...');
+        const response = await fetch(OPENAI_API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: MODEL_NAME,
+                messages,
+                max_tokens: 250
+            }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => null);
+            const errorMsg = errorData?.error?.message || `API Error (${response.status})`;
+            if (response.status === 401) {
+                throw new Error('Invalid OpenAI API key. Check your key in SMAC Settings.');
+            }
+            if (response.status === 429) {
+                throw new Error('OpenAI rate limit exceeded. Try again in a moment.');
+            }
+            throw new Error(errorMsg);
+        }
+
+        const data = await response.json();
+        let generatedText = data.choices?.[0]?.message?.content?.trim() || '';
+        generatedText = cleanResponse(generatedText);
+
+        if (!generatedText || generatedText === 'SKIP' || generatedText.length < 5) {
+            sendResponse({ success: false, error: 'Could not generate a reply.' });
+            return;
+        }
+
+        sendResponse({ success: true, reply: generatedText });
+    } catch (error) {
+        console.error('SMAC Conversation Analysis Error:', error);
+        let msg = error.message;
+        if (msg.includes('Failed to fetch')) {
+            msg = 'Could not connect to OpenAI API. Check your internet connection.';
+        }
+        sendResponse({ success: false, error: msg });
     }
 }

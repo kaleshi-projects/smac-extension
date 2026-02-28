@@ -1,4 +1,6 @@
-import { PLATFORMS, SELECTORS, detectPlatform } from '../utils/dom';
+import { PLATFORMS, SELECTORS, detectPlatform, PAGE_TYPES, detectPageType } from '../utils/dom';
+import { injectProfileButton } from './profileButton';
+import { injectMessagingButton } from './messagingButton';
 
 // State
 let isActive = false;
@@ -46,13 +48,13 @@ function debounce(func, wait) {
 function startObserver() {
     if (!isActive || !currentPlatform) return;
 
-    // Inject buttons into existing posts
-    injectButtonsIntoPosts();
+    // Run initial injections
+    runInjections();
 
-    // Watch for new posts using MutationObserver
+    // Watch for new DOM nodes (posts loading, messaging panels opening)
     const debouncedInject = debounce(() => {
         if (!isActive) return;
-        injectButtonsIntoPosts();
+        runInjections();
     }, 500);
 
     const observer = new MutationObserver((mutations) => {
@@ -63,6 +65,52 @@ function startObserver() {
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
+
+    // SPA navigation detection (LinkedIn and X are SPAs)
+    let lastUrl = window.location.href;
+    const titleEl = document.querySelector('head > title') || document.head;
+    const urlObserver = new MutationObserver(() => {
+        if (window.location.href !== lastUrl) {
+            lastUrl = window.location.href;
+            console.log('SMAC: URL changed to', lastUrl);
+            setTimeout(() => runInjections(), 1000);
+        }
+    });
+    urlObserver.observe(titleEl, { childList: true, subtree: true, characterData: true });
+}
+
+function runInjections() {
+    if (!isActive || !currentPlatform) return;
+    if (!chrome.runtime?.id) return;
+
+    const pageType = detectPageType(currentPlatform);
+
+    // Feed posts buttons (existing feature) - show on feed and profile pages
+    if (pageType === PAGE_TYPES.FEED || pageType === PAGE_TYPES.PROFILE) {
+        injectButtonsIntoPosts();
+    }
+
+    // Profile "Start Conversation" button
+    if (pageType === PAGE_TYPES.PROFILE) {
+        injectProfileButton(currentPlatform, showToast);
+    }
+
+    // Messaging "Thinking" button
+    if (pageType === PAGE_TYPES.MESSAGING) {
+        injectMessagingButton(currentPlatform, showToast);
+    }
+
+    // LinkedIn messaging overlay can appear on any page
+    if (currentPlatform === PLATFORMS.LINKEDIN && pageType !== PAGE_TYPES.MESSAGING) {
+        const hasOverlay = document.querySelector(
+            '.msg-overlay-list-bubble [contenteditable="true"], ' +
+            '.msg-overlay-conversation-bubble [contenteditable="true"], ' +
+            '.msg-form__contenteditable'
+        );
+        if (hasOverlay) {
+            injectMessagingButton(currentPlatform, showToast);
+        }
+    }
 }
 
 // Inject "⚡ SMAC It" button into posts
