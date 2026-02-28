@@ -1,27 +1,72 @@
-import { PLATFORMS, MESSAGING_SELECTORS, queryWithFallbacks, queryAllWithFallbacks } from '../utils/dom';
+import { PLATFORMS, MESSAGING_SELECTORS } from '../utils/dom';
+
+// ---- LinkedIn Message Scraping (class-name independent) ----
 
 function scrapeLinkedInMessages() {
-    const sel = MESSAGING_SELECTORS[PLATFORMS.LINKEDIN];
-
-    // Find message entries with fallbacks
-    const entries = queryAllWithFallbacks(sel.messageEntries);
+    // Strategy: Find all message-like text in the conversation area
+    // Messages are typically in a scrollable list of items
     const messages = [];
 
-    const recent = Array.from(entries).slice(-10);
+    // Find the conversation container — look for a scrollable area with many list items
+    const main = document.querySelector('main') || document.body;
 
-    recent.forEach(entry => {
-        const textEl = queryWithFallbacks(sel.messageTexts, entry);
-        const senderEl = entry.closest('.msg-s-message-group')?.querySelector(
-            queryAllWithFallbacks(sel.messageSenders).length > 0 ? sel.messageSenders[0] : '.msg-s-message-group__name'
-        ) || queryWithFallbacks(sel.messageSenders, entry.parentElement || entry);
+    // Strategy 1: Find li elements that look like messages (contain text and timestamps)
+    const allLi = main.querySelectorAll('li');
+    const messageLis = [];
+    for (const li of allLi) {
+        const text = li.innerText?.trim();
+        // Message items typically have some text content and are not too long (not a full section)
+        if (text && text.length > 2 && text.length < 2000) {
+            // Check if it looks like a message (has text content, not just a button)
+            const hasButtons = li.querySelectorAll('button').length;
+            const hasLinks = li.querySelectorAll('a').length;
+            // Messages typically don't have many interactive elements
+            if (hasButtons <= 2 && hasLinks <= 2) {
+                messageLis.push(li);
+            }
+        }
+    }
 
-        if (textEl && textEl.innerText?.trim()) {
+    // Take last 10
+    const recent = messageLis.slice(-10);
+    for (const li of recent) {
+        const text = li.innerText?.trim();
+        if (text) {
             messages.push({
-                sender: senderEl?.innerText?.trim() || 'Other',
-                text: textEl.innerText.trim()
+                sender: 'Unknown',
+                text: text
             });
         }
-    });
+    }
+
+    // Strategy 2: If no li items found, look for message-like elements by structure
+    if (messages.length === 0) {
+        // Try to find contenteditable's sibling container that holds messages
+        const contentEditable = document.querySelector('[contenteditable="true"]');
+        if (contentEditable) {
+            // Walk up to find the conversation container
+            let container = contentEditable.parentElement;
+            for (let i = 0; i < 10 && container; i++) {
+                const items = container.querySelectorAll('div[class], p');
+                if (items.length > 5) {
+                    // Found a container with multiple items - these might be messages
+                    const textBlocks = [];
+                    for (const item of items) {
+                        const t = item.innerText?.trim();
+                        if (t && t.length > 2 && t.length < 1000) {
+                            textBlocks.push(t);
+                        }
+                    }
+                    const unique = [...new Set(textBlocks)].slice(-10);
+                    for (const t of unique) {
+                        messages.push({ sender: 'Unknown', text: t });
+                    }
+                    if (messages.length > 0) break;
+                }
+                container = container.parentElement;
+            }
+        }
+    }
 
     return messages;
 }
@@ -55,63 +100,53 @@ function scrapeMessages(platform) {
     return [];
 }
 
-// Find LinkedIn messaging input areas using multiple fallback strategies
-function findLinkedInInputAreas() {
-    const sel = MESSAGING_SELECTORS[PLATFORMS.LINKEDIN];
+// ---- Find LinkedIn messaging input (class-name independent) ----
 
-    // Try each input area selector
-    for (const selector of sel.inputAreas) {
-        try {
-            const areas = document.querySelectorAll(selector);
-            if (areas.length > 0) {
-                console.log('SMAC: Found LinkedIn input via:', selector);
-                return areas;
-            }
-        } catch (e) {}
+function findLinkedInInputAreas() {
+    const found = [];
+
+    // Strategy 1: Any contenteditable in a messaging context
+    const allEditable = document.querySelectorAll('[contenteditable="true"], [role="textbox"]');
+    for (const el of allEditable) {
+        const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+        // Check if it's a messaging input by aria-label
+        if (ariaLabel.includes('message') || ariaLabel.includes('write') ||
+            ariaLabel.includes('reply') || ariaLabel.includes('chat') ||
+            ariaLabel.includes('type')) {
+            found.push(el);
+            continue;
+        }
+        // Check if it's inside a messaging-related container (URL-based)
+        if (window.location.pathname.startsWith('/messaging/')) {
+            found.push(el);
+            continue;
+        }
+        // Check if it's inside an overlay bubble
+        const overlay = el.closest('[class*="msg-overlay"], [class*="msg-convo"], [class*="messaging"]');
+        if (overlay) {
+            found.push(el);
+        }
     }
 
-    return [];
+    if (found.length > 0) {
+        console.log('SMAC: Found', found.length, 'LinkedIn message inputs');
+    }
+
+    return found;
 }
 
-// Find the best container for the input area
-function findLinkedInInputContainer(inputArea) {
-    const sel = MESSAGING_SELECTORS[PLATFORMS.LINKEDIN];
-
-    // Try explicit container selectors going upward from input
-    for (const containerSel of sel.inputContainers) {
-        try {
-            const container = inputArea.closest(containerSel);
-            if (container) return container;
-        } catch (e) {}
-    }
-
-    // Fallback: walk up until we find a form-like container
+function findInputContainer(inputArea) {
+    // Walk up to find a form or form-like container
     let el = inputArea.parentElement;
-    for (let i = 0; i < 5 && el; i++) {
+    for (let i = 0; i < 6 && el; i++) {
         const tag = el.tagName?.toLowerCase();
-        const cls = el.className || '';
-        if (tag === 'form' || cls.includes('msg-form') || cls.includes('msg-compose') ||
-            cls.includes('msg-overlay') || el.querySelector('button[type="submit"], button[aria-label*="Send" i]')) {
-            return el;
-        }
+        // Look for a form, or a container with a send button
+        if (tag === 'form') return el;
+        const sendBtn = el.querySelector('button[type="submit"], button[aria-label*="Send" i], button[aria-label*="send" i]');
+        if (sendBtn) return el;
         el = el.parentElement;
     }
-
     return inputArea.parentElement;
-}
-
-// Find toolbar area for button placement
-function findLinkedInToolbar(container) {
-    const sel = MESSAGING_SELECTORS[PLATFORMS.LINKEDIN];
-
-    for (const toolbarSel of sel.toolbarAreas) {
-        try {
-            const toolbar = container.querySelector(toolbarSel);
-            if (toolbar) return toolbar;
-        } catch (e) {}
-    }
-
-    return null;
 }
 
 export function injectMessagingButton(platform, showToast) {
@@ -130,7 +165,7 @@ export function injectMessagingButton(platform, showToast) {
     Array.from(inputAreas).forEach(inputArea => {
         let container;
         if (platform === PLATFORMS.LINKEDIN) {
-            container = findLinkedInInputContainer(inputArea);
+            container = findInputContainer(inputArea);
         } else {
             container = inputArea.closest(sel.inputContainer) || inputArea.parentElement;
         }
@@ -223,15 +258,10 @@ export function injectMessagingButton(platform, showToast) {
             }
         });
 
-        // Place the button
+        // Place the button next to the input area
         if (platform === PLATFORMS.LINKEDIN) {
-            const toolbar = findLinkedInToolbar(container);
-            if (toolbar) {
-                toolbar.appendChild(btn);
-            } else {
-                // Place before the input area
-                inputArea.parentElement?.insertBefore(btn, inputArea);
-            }
+            // Try to place before the input
+            inputArea.parentElement?.insertBefore(btn, inputArea);
         } else if (platform === PLATFORMS.X) {
             const toolbarArea = document.querySelector(sel.toolbarArea);
             if (toolbarArea) {

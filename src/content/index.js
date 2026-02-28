@@ -118,79 +118,115 @@ function injectButtonsIntoPosts() {
     if (!isActive || !currentPlatform) return;
     if (!chrome.runtime?.id) return;
 
-    const config = SELECTORS[currentPlatform];
+    if (currentPlatform === PLATFORMS.X) {
+        injectButtonsIntoXPosts();
+    } else if (currentPlatform === PLATFORMS.LINKEDIN) {
+        injectButtonsIntoLinkedInPosts();
+    }
+}
+
+// X/Twitter: Use stable data-testid selectors
+function injectButtonsIntoXPosts() {
+    const config = SELECTORS[PLATFORMS.X];
     const posts = document.querySelectorAll(config.post);
 
     posts.forEach((post) => {
-        // Skip if button already injected
         if (post.querySelector('.smac-btn')) return;
+        if (hasMediaContent(post)) return;
 
-        // Skip video/audio posts (X-specific)
-        if (currentPlatform === PLATFORMS.X && hasMediaContent(post)) return;
-
-        // For LinkedIn, wait for action bar to be available
-        if (currentPlatform === PLATFORMS.LINKEDIN) {
-            const actionBar = post.querySelector(config.actionBar);
-            if (!actionBar) return;
-        }
-
-        // 1. Create the button with correct platform style
-        const btn = createSmacButton(currentPlatform);
-
-        // 2. Attach Click Handler
+        const btn = createSmacButton(PLATFORMS.X);
         btn.addEventListener('click', async (e) => {
             e.preventDefault();
             e.stopPropagation();
-
-            // Visual Feedback: Button State
-            const originalInnerHTML = btn.innerHTML;
-            btn.innerHTML = `<span style="animation: pulse 1s infinite">⏳</span>`;
-            btn.disabled = true;
-
-            // Visual Feedback: Toast
-            showToast('⏳ Reading post...', 'info');
-
-            try {
-                const comment = await analyzeAndGenerateComment(post);
-
-                if (comment) {
-                    // Output 1: Console log
-                    console.log('=== SMAC Generated Comment ===');
-                    console.log(comment);
-
-                    // Output 2: Copy to clipboard
-                    await navigator.clipboard.writeText(comment);
-
-                    // Visual feedback
-                    btn.innerHTML = originalInnerHTML;
-                    showToast('✅ Comment copied to clipboard!', 'success');
-                } else {
-                    btn.innerHTML = originalInnerHTML;
-                    showToast('⚠️ Skipped (No tech context)', 'warning');
-                }
-            } catch (err) {
-                console.error('SMAC Error:', err);
-                btn.innerHTML = originalInnerHTML;
-                showToast(`❌ Error: ${err.message || 'Unknown error'}`, 'error');
-            } finally {
-                btn.disabled = false;
-            }
+            await handleSmacClick(btn, post, PLATFORMS.X);
         });
 
-        // 3. Inject button based on platform
-        if (currentPlatform === PLATFORMS.X) {
-            // X: Absolute positioning in top-right of post
-            post.style.position = 'relative';
-            post.appendChild(btn);
-        } else if (currentPlatform === PLATFORMS.LINKEDIN) {
-            // LinkedIn: Insert as first child of action bar
-            const actionBar = post.querySelector(config.actionBar);
-            if (actionBar) {
-                btn.style.marginRight = '8px';
-                actionBar.insertBefore(btn, actionBar.firstChild);
-            }
-        }
+        post.style.position = 'relative';
+        post.appendChild(btn);
     });
+}
+
+// LinkedIn: Discover posts by finding engagement button groups (Like/Comment/Repost)
+function injectButtonsIntoLinkedInPosts() {
+    // Strategy: Find "Like" buttons, then walk up to the post container
+    const allButtons = document.querySelectorAll('button');
+    const likeButtons = [];
+    for (const btn of allButtons) {
+        const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+        const text = btn.innerText?.trim().toLowerCase() || '';
+        // LinkedIn "Like" buttons have aria-label containing "like" or "react"
+        if ((ariaLabel.includes('like') || ariaLabel === 'react' || text === 'like') &&
+            !ariaLabel.includes('unlike') && !btn.closest('.smac-btn')) {
+            likeButtons.push(btn);
+        }
+    }
+
+    for (const likeBtn of likeButtons) {
+        // Walk up from Like button to find the post container
+        // The Like button is inside an action bar which is inside the post
+        let postContainer = likeBtn.parentElement;
+        for (let i = 0; i < 8 && postContainer; i++) {
+            // A post container typically has both text content and the action bar
+            const hasText = postContainer.querySelector('span, p');
+            const hasMultipleButtons = postContainer.querySelectorAll('button').length >= 3;
+            const isLargeEnough = postContainer.offsetHeight > 100;
+
+            if (hasText && hasMultipleButtons && isLargeEnough && postContainer.parentElement) {
+                // Verify this isn't the entire feed/main
+                const tag = postContainer.tagName?.toLowerCase();
+                if (tag !== 'main' && tag !== 'body' && !postContainer.getAttribute('role')?.includes('main')) {
+                    break;
+                }
+            }
+            postContainer = postContainer.parentElement;
+        }
+
+        if (!postContainer || postContainer.tagName === 'BODY') continue;
+        if (postContainer.querySelector('.smac-btn')) continue;
+
+        const btn = createSmacButton(PLATFORMS.LINKEDIN);
+
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            await handleSmacClick(btn, postContainer, PLATFORMS.LINKEDIN);
+        });
+
+        // Insert button near the action bar (Like button's parent area)
+        const actionArea = likeBtn.parentElement;
+        if (actionArea) {
+            btn.style.marginRight = '8px';
+            actionArea.insertBefore(btn, actionArea.firstChild);
+        }
+    }
+}
+
+async function handleSmacClick(btn, post, platform) {
+    const originalInnerHTML = btn.innerHTML;
+    btn.innerHTML = `<span style="animation: pulse 1s infinite">⏳</span>`;
+    btn.disabled = true;
+    showToast('⏳ Reading post...', 'info');
+
+    try {
+        const comment = await analyzeAndGenerateComment(post, platform);
+
+        if (comment) {
+            console.log('=== SMAC Generated Comment ===');
+            console.log(comment);
+            await navigator.clipboard.writeText(comment);
+            btn.innerHTML = originalInnerHTML;
+            showToast('✅ Comment copied to clipboard!', 'success');
+        } else {
+            btn.innerHTML = originalInnerHTML;
+            showToast('⚠️ Skipped (No tech context)', 'warning');
+        }
+    } catch (err) {
+        console.error('SMAC Error:', err);
+        btn.innerHTML = originalInnerHTML;
+        showToast(`❌ Error: ${err.message || 'Unknown error'}`, 'error');
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 function createSmacButton(platform = PLATFORMS.X) {
@@ -293,22 +329,44 @@ function hasMediaContent(post) {
 }
 
 // Analyze post and return generated comment (or null if skipped)
-async function analyzeAndGenerateComment(post) {
-    const config = SELECTORS[currentPlatform];
-    const textEl = post.querySelector(config.text);
-    const imageEl = post.querySelector(config.image);
-    let imageUrl = imageEl ? imageEl.src : null;
+async function analyzeAndGenerateComment(post, platform) {
+    let text = '';
+    let imageUrl = null;
+
+    if (platform === PLATFORMS.X) {
+        const config = SELECTORS[PLATFORMS.X];
+        const textEl = post.querySelector(config.text);
+        const imageEl = post.querySelector(config.image);
+        text = textEl ? textEl.innerText : '';
+        imageUrl = imageEl ? imageEl.src : null;
+    } else if (platform === PLATFORMS.LINKEDIN) {
+        // LinkedIn: extract text from the post container using generic selectors
+        // Get all visible text spans (longest one is likely the post body)
+        const spans = post.querySelectorAll('span, p, div');
+        const textCandidates = [];
+        for (const el of spans) {
+            const t = el.innerText?.trim();
+            if (t && t.length > 20 && t.length < 5000) {
+                textCandidates.push(t);
+            }
+        }
+        // Sort by length descending, the longest text is likely the post content
+        textCandidates.sort((a, b) => b.length - a.length);
+        text = textCandidates[0] || '';
+
+        // Try to find images in the post
+        const img = post.querySelector('img[src*="media.licdn.com"], img[src*="dms.licdn.com"]');
+        imageUrl = img ? img.src : null;
+    }
 
     if (imageUrl && !imageUrl.startsWith('http')) {
         imageUrl = null;
     }
 
-    if (!textEl && !imageUrl) {
+    if (!text && !imageUrl) {
         console.log('SMAC: No content to analyze');
         return null;
     }
-
-    const text = textEl ? textEl.innerText : "";
 
     if (!chrome.runtime?.id) return null;
 

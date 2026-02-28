@@ -1,51 +1,194 @@
-import { PLATFORMS, PROFILE_SELECTORS, queryWithFallbacks, queryAllWithFallbacks } from '../utils/dom';
+import { PLATFORMS, PROFILE_SELECTORS } from '../utils/dom';
+
+// ---- LinkedIn Profile Scraping (class-name independent) ----
 
 function scrapeLinkedInProfile() {
-    const sel = PROFILE_SELECTORS[PLATFORMS.LINKEDIN];
     const data = {};
 
-    const nameEl = queryWithFallbacks(sel.name);
-    data.name = nameEl?.innerText?.trim() || '';
-
-    const headlineEl = queryWithFallbacks(sel.headline);
-    data.headline = headlineEl?.innerText?.trim() || '';
-
-    const locationEl = queryWithFallbacks(sel.location);
-    data.location = locationEl?.innerText?.trim() || '';
-
-    const aboutEl = queryWithFallbacks(sel.about);
-    data.about = aboutEl?.innerText?.trim() || '';
-
-    const expEntries = queryAllWithFallbacks(sel.experience);
-    data.experience = Array.from(expEntries).slice(0, 5).map(el => el.innerText?.trim()).filter(Boolean);
-
-    const eduEntries = queryAllWithFallbacks(sel.education);
-    data.education = Array.from(eduEntries).slice(0, 3).map(el => el.innerText?.trim()).filter(Boolean);
-
-    const skillEntries = queryAllWithFallbacks(sel.skills);
-    data.skills = Array.from(skillEntries).slice(0, 10).map(el => el.innerText?.trim()).filter(Boolean);
-
-    // Featured section
-    const featuredEl = queryWithFallbacks(sel.featured);
-    if (featuredEl) {
-        const featuredImages = featuredEl.querySelectorAll('img');
-        data.featured = Array.from(featuredImages).slice(0, 5).map(img => img.alt || img.title || '').filter(Boolean);
-        const featuredText = featuredEl.querySelectorAll('span.visually-hidden, span[aria-hidden="true"]');
-        const texts = Array.from(featuredText).map(el => el.innerText?.trim()).filter(Boolean);
-        if (texts.length) data.featuredTexts = texts.slice(0, 5);
+    // 1. Name — from document.title: "FirstName LastName - Title | LinkedIn"
+    //    or from meta og:title
+    const ogTitle = document.querySelector('meta[property="og:title"]')?.content;
+    const pageTitle = document.title || '';
+    if (ogTitle) {
+        data.name = ogTitle.split(' - ')[0]?.trim() || ogTitle.split('|')[0]?.trim() || '';
+    } else {
+        data.name = pageTitle.split(' - ')[0]?.trim() || pageTitle.split('|')[0]?.trim() || '';
     }
 
-    // Activity section
-    const activityEl = queryWithFallbacks(sel.activity);
-    if (activityEl) {
-        const activityTexts = activityEl.querySelectorAll('span[aria-hidden="true"]');
-        data.activity = Array.from(activityTexts).slice(0, 5).map(el => el.innerText?.trim()).filter(Boolean);
-    }
+    // 2. Headline — from meta description or og:description
+    const metaDesc = document.querySelector('meta[name="description"]')?.content ||
+                     document.querySelector('meta[property="og:description"]')?.content || '';
+    data.headline = metaDesc;
 
+    // 3. Location — find by looking for text near a location icon or in the top card
+    //    LinkedIn's top section has location text, try to find it by structural position
+    data.location = findTextByProximity(['location', 'city', 'country', 'india', 'states', 'region']);
+
+    // 4. Profile URL
     data.profileUrl = window.location.href;
+
+    // 5. About — find section by heading text "About"
+    const aboutSection = findSectionByHeading('About');
+    if (aboutSection) {
+        data.about = extractSectionText(aboutSection);
+    }
+
+    // 6. Experience — find section by heading text "Experience"
+    const expSection = findSectionByHeading('Experience');
+    if (expSection) {
+        const items = expSection.querySelectorAll('li');
+        data.experience = Array.from(items).slice(0, 5).map(li => li.innerText?.trim()).filter(t => t.length > 5);
+        if (data.experience.length === 0) {
+            data.experience = [extractSectionText(expSection)];
+        }
+    }
+
+    // 7. Education
+    const eduSection = findSectionByHeading('Education');
+    if (eduSection) {
+        const items = eduSection.querySelectorAll('li');
+        data.education = Array.from(items).slice(0, 3).map(li => li.innerText?.trim()).filter(t => t.length > 5);
+        if (data.education.length === 0) {
+            data.education = [extractSectionText(eduSection)];
+        }
+    }
+
+    // 8. Skills
+    const skillsSection = findSectionByHeading('Skills');
+    if (skillsSection) {
+        const items = skillsSection.querySelectorAll('li');
+        data.skills = Array.from(items).slice(0, 10).map(li => li.innerText?.trim()).filter(t => t.length > 2);
+        if (data.skills.length === 0) {
+            data.skills = [extractSectionText(skillsSection)];
+        }
+    }
+
+    // 9. Featured
+    const featuredSection = findSectionByHeading('Featured');
+    if (featuredSection) {
+        const images = featuredSection.querySelectorAll('img');
+        data.featured = Array.from(images).slice(0, 5).map(img => img.alt || '').filter(Boolean);
+        const text = extractSectionText(featuredSection);
+        if (text) data.featuredText = text;
+    }
+
+    // 10. Activity
+    const activitySection = findSectionByHeading('Activity');
+    if (activitySection) {
+        data.activity = extractSectionText(activitySection);
+    }
+
+    // 11. Also scrape visible text from the top card area (first section)
+    const firstSection = document.querySelector('main section');
+    if (firstSection) {
+        const topTexts = [];
+        firstSection.querySelectorAll('span, a, div').forEach(el => {
+            const text = el.innerText?.trim();
+            if (text && text.length > 3 && text.length < 200 && !topTexts.includes(text)) {
+                topTexts.push(text);
+            }
+        });
+        // Deduplicate and get unique short strings from the top card
+        data.topCardInfo = [...new Set(topTexts)].slice(0, 15).join(' | ');
+    }
 
     return data;
 }
+
+// Find a section on the page by its heading text (e.g., "About", "Experience")
+function findSectionByHeading(headingText) {
+    // Strategy 1: Look through all section elements for one whose heading matches
+    const sections = document.querySelectorAll('main section, [role="main"] section');
+    for (const section of sections) {
+        // Check first few text nodes/headings in the section
+        const headings = section.querySelectorAll('h2, h3, [role="heading"]');
+        for (const h of headings) {
+            const text = h.innerText?.trim();
+            if (text && text.toLowerCase().includes(headingText.toLowerCase())) {
+                return section;
+            }
+        }
+        // Also check if the section has an anchor/span with id matching
+        const anchor = section.querySelector(`#${headingText.toLowerCase()}`);
+        if (anchor) return section;
+    }
+
+    // Strategy 2: Find a heading anywhere and walk up to section-like container
+    const allHeadings = document.querySelectorAll('h2, h3, [role="heading"]');
+    for (const h of allHeadings) {
+        if (h.innerText?.trim().toLowerCase().includes(headingText.toLowerCase())) {
+            // Walk up to find a section or suitable container
+            let parent = h.parentElement;
+            for (let i = 0; i < 5 && parent; i++) {
+                if (parent.tagName === 'SECTION' || parent.querySelector('ul, li')) {
+                    return parent;
+                }
+                parent = parent.parentElement;
+            }
+        }
+    }
+
+    // Strategy 3: Text content scan — find any element that says exactly the heading text
+    const walker = document.createTreeWalker(
+        document.querySelector('main') || document.body,
+        NodeFilter.SHOW_ELEMENT,
+        {
+            acceptNode: (node) => {
+                const directText = Array.from(node.childNodes)
+                    .filter(n => n.nodeType === Node.TEXT_NODE)
+                    .map(n => n.textContent.trim())
+                    .join('');
+                if (directText.toLowerCase() === headingText.toLowerCase()) {
+                    return NodeFilter.FILTER_ACCEPT;
+                }
+                return NodeFilter.FILTER_SKIP;
+            }
+        }
+    );
+    const heading = walker.nextNode();
+    if (heading) {
+        let parent = heading.parentElement;
+        for (let i = 0; i < 5 && parent; i++) {
+            if (parent.tagName === 'SECTION') return parent;
+            parent = parent.parentElement;
+        }
+    }
+
+    return null;
+}
+
+// Extract meaningful text from a section (skip the heading itself)
+function extractSectionText(section) {
+    const texts = [];
+    const children = section.querySelectorAll('span, p, div');
+    for (const el of children) {
+        const text = el.innerText?.trim();
+        if (text && text.length > 10 && text.length < 2000 && !texts.includes(text)) {
+            texts.push(text);
+        }
+    }
+    // Return the longest meaningful text (likely the actual content, not labels)
+    const sorted = texts.sort((a, b) => b.length - a.length);
+    return sorted[0] || '';
+}
+
+// Try to find location text by looking near common location patterns
+function findTextByProximity(keywords) {
+    const main = document.querySelector('main') || document.body;
+    const spans = main.querySelectorAll('span, div');
+    for (const el of spans) {
+        const text = el.innerText?.trim();
+        if (!text || text.length > 100 || text.length < 3) continue;
+        // Check if nearby sibling or parent has location-like content
+        const lower = text.toLowerCase();
+        for (const kw of keywords) {
+            if (lower.includes(kw)) return text;
+        }
+    }
+    return '';
+}
+
+// ---- X/Twitter Profile Scraping ----
 
 function scrapeXProfile() {
     const sel = PROFILE_SELECTORS[PLATFORMS.X];
@@ -72,7 +215,6 @@ function scrapeXProfile() {
     const followingEl = document.querySelector(sel.followingCount);
     data.following = followingEl?.innerText?.trim() || '';
 
-    // Grab pinned/recent tweet if visible
     const pinnedTweet = document.querySelector('article[data-testid="tweet"] [data-testid="tweetText"]');
     data.pinnedTweet = pinnedTweet?.innerText?.trim() || '';
 
@@ -80,6 +222,8 @@ function scrapeXProfile() {
 
     return data;
 }
+
+// ---- Entry Points ----
 
 function scrapeProfile(platform) {
     if (platform === PLATFORMS.LINKEDIN) return scrapeLinkedInProfile();
@@ -89,48 +233,37 @@ function scrapeProfile(platform) {
 
 // Find the best anchor point for the LinkedIn profile button
 function findLinkedInProfileAnchor() {
-    const sel = PROFILE_SELECTORS[PLATFORMS.LINKEDIN];
-
-    // Strategy 1: Try explicit selectors
-    for (const selector of sel.buttonAnchors) {
-        try {
-            const el = document.querySelector(selector);
-            if (el) {
-                console.log('SMAC: Found LinkedIn anchor via selector:', selector);
-                return el;
-            }
-        } catch (e) {}
-    }
-
-    // Strategy 2: Find the container of Connect/Message/Follow buttons by text content
-    const allButtons = document.querySelectorAll('main button, .scaffold-layout__main button');
+    // Strategy 1: Find the container of Connect/Message/Follow buttons by text content
+    const allButtons = document.querySelectorAll('main button, button');
     for (const btn of allButtons) {
         const text = btn.innerText?.trim().toLowerCase() || '';
         const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
-        if (text === 'connect' || text === 'message' || text === 'follow' ||
-            ariaLabel.includes('connect') || ariaLabel.includes('invite') || ariaLabel.includes('message')) {
-            // Found a profile action button, use its parent container
+        if (text === 'connect' || text === 'message' || text === 'follow' || text === 'more' ||
+            ariaLabel.includes('connect') || ariaLabel.includes('invite') ||
+            ariaLabel.includes('message') || ariaLabel.includes('follow')) {
             const parent = btn.parentElement;
-            if (parent) {
+            if (parent && parent.querySelectorAll('button').length >= 1) {
                 console.log('SMAC: Found LinkedIn anchor via button text:', text || ariaLabel);
                 return parent;
             }
         }
     }
 
-    // Strategy 3: Find the first section/card in main content that contains a h1
-    const nameEl = queryWithFallbacks(sel.name);
-    if (nameEl) {
-        // Walk up to find a suitable container - the actions are usually siblings of the name's container
-        let container = nameEl.parentElement;
-        for (let i = 0; i < 6 && container; i++) {
-            // Look for a div that contains buttons (the actions area)
-            const buttons = container.querySelectorAll('button');
-            if (buttons.length >= 2) {
-                console.log('SMAC: Found LinkedIn anchor via name proximity');
-                return container;
+    // Strategy 2: Find the first section in main and look for button container
+    const firstSection = document.querySelector('main section');
+    if (firstSection) {
+        const buttons = firstSection.querySelectorAll('button');
+        if (buttons.length >= 2) {
+            // Find the common parent of the first two buttons
+            const btn1 = buttons[0];
+            let container = btn1.parentElement;
+            for (let i = 0; i < 4 && container; i++) {
+                if (container.querySelectorAll('button').length >= 2) {
+                    console.log('SMAC: Found LinkedIn anchor via first section buttons');
+                    return container;
+                }
+                container = container.parentElement;
             }
-            container = container.parentElement;
         }
     }
 
@@ -219,6 +352,8 @@ export function injectProfileButton(platform, showToast) {
 
         try {
             const profileData = scrapeProfile(platform);
+
+            console.log('SMAC: Scraped profile data:', JSON.stringify(profileData).substring(0, 500));
 
             if (!profileData.name && !profileData.bio && !profileData.headline) {
                 showToast('⚠️ Could not read profile data. Try scrolling down first.', 'warning');
