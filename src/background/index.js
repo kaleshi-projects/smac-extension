@@ -1,8 +1,8 @@
-// Background script for SMAC Extension (X.com only)
-// Optimized for RTX 3050 6GB VRAM with llava-phi3
+// Background script for SMAC Extension
+// Uses OpenAI GPT-4o-mini with vision for post analysis
 
-const OLLAMA_API_URL = 'http://localhost:11434/api/generate';
-const MODEL_NAME = 'llava-phi3:latest';
+const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
+const MODEL_NAME = 'gpt-4o-mini';
 const IMAGE_TIMEOUT_MS = 5000;
 const MAX_COMMENT_LENGTH = 280; // Twitter character limit
 
@@ -54,48 +54,74 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
+async function getApiKey() {
+    const result = await chrome.storage.local.get(['openaiApiKey']);
+    return result.openaiApiKey || null;
+}
+
 async function handleAnalysis(postText, imageUrl, sendResponse) {
     try {
-        let images = [];
-        let prompt = `${SYSTEM_PROMPT}\n\nPost:\n${postText}\n\nComment:`;
+        const apiKey = await getApiKey();
+        if (!apiKey) {
+            sendResponse({ success: false, error: 'OpenAI API key not set. Open the SMAC popup and add your key in Settings.' });
+            return;
+        }
+
+        const messages = [
+            { role: 'system', content: SYSTEM_PROMPT }
+        ];
+
+        let userContent;
 
         if (imageUrl && imageUrl.startsWith('http')) {
             console.log('SMAC: Fetching image:', imageUrl);
             try {
-                // Attempt to fetch image, but don't let it fail the whole request
-                const base64Image = await fetchImageWithTimeout(imageUrl, IMAGE_TIMEOUT_MS);
-                if (base64Image) {
-                    images = [base64Image];
-                    prompt = `${SYSTEM_PROMPT}\n\nAnalyze this image and text:\n${postText}\n\nComment:`;
+                const base64DataUrl = await fetchImageWithTimeout(imageUrl, IMAGE_TIMEOUT_MS);
+                if (base64DataUrl) {
+                    userContent = [
+                        { type: 'text', text: `Analyze this image and text:\n${postText}\n\nComment:` },
+                        { type: 'image_url', image_url: { url: base64DataUrl } }
+                    ];
                 }
             } catch (e) {
                 console.warn('SMAC: Image fetch failed or timed out, PROCEEDING WITH TEXT ONLY:', e.message);
-                // Fallback to text only prompt is already set (initial value of 'prompt')
             }
         }
 
-        console.log('SMAC: Sending request to Ollama...');
-        const response = await fetch(OLLAMA_API_URL, {
+        if (!userContent) {
+            userContent = `Post:\n${postText}\n\nComment:`;
+        }
+
+        messages.push({ role: 'user', content: userContent });
+
+        console.log('SMAC: Sending request to OpenAI...');
+        const response = await fetch(OPENAI_API_URL, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
             body: JSON.stringify({
                 model: MODEL_NAME,
-                prompt: prompt,
-                images: images.length > 0 ? images : undefined,
-                stream: false,
-                options: {
-                    num_ctx: 2048
-                }
+                messages: messages,
+                max_tokens: 150
             }),
         });
 
         if (!response.ok) {
-            // Check if it's a connection error
-            throw new Error(`Ollama API Error (${response.status}). Is Ollama running?`);
+            const errorData = await response.json().catch(() => null);
+            const errorMsg = errorData?.error?.message || `API Error (${response.status})`;
+            if (response.status === 401) {
+                throw new Error('Invalid OpenAI API key. Check your key in SMAC Settings.');
+            }
+            if (response.status === 429) {
+                throw new Error('OpenAI rate limit exceeded. Try again in a moment.');
+            }
+            throw new Error(errorMsg);
         }
 
         const data = await response.json();
-        let generatedText = data.response?.trim() || 'SKIP';
+        let generatedText = data.choices?.[0]?.message?.content?.trim() || 'SKIP';
 
         // Clean up the response - remove any markdown or formatting
         generatedText = cleanResponse(generatedText);
@@ -107,11 +133,10 @@ async function handleAnalysis(postText, imageUrl, sendResponse) {
 
         sendResponse({ success: true, comment: generatedText });
     } catch (error) {
-        console.error('SMAC Ollama Error:', error);
-        // Differentiate between Ollama errors and others
+        console.error('SMAC OpenAI Error:', error);
         let msg = error.message;
         if (msg.includes('Failed to fetch')) {
-            msg = 'Could not connect to Ollama (localhost:11434). Is it running?';
+            msg = 'Could not connect to OpenAI API. Check your internet connection.';
         }
         sendResponse({ success: false, error: msg });
     }
@@ -182,9 +207,7 @@ async function fetchImageWithTimeout(url, timeoutMs) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onloadend = () => {
-                const result = reader.result.toString();
-                const base64String = result.includes(',') ? result.split(',')[1] : result;
-                resolve(base64String);
+                resolve(reader.result.toString());
             };
             reader.onerror = () => reject(new Error('FileReader error'));
             reader.readAsDataURL(blob);

@@ -4,18 +4,23 @@ import { useEffect, useState } from 'react'
 function App() {
   const [isActive, setIsActive] = useState(false);
   const [logs, setLogs] = useState<any[]>([]);
+  const [apiKey, setApiKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [keySaveStatus, setKeySaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
 
   useEffect(() => {
     // Load initial state
-    chrome.storage.local.get(['isActive', 'smacLogs'], (result) => {
+    chrome.storage.local.get(['isActive', 'smacLogs', 'openaiApiKey'], (result) => {
       setIsActive(!!result.isActive);
       if (result.smacLogs) setLogs(result.smacLogs as any[]);
+      if (result.openaiApiKey) setApiKey(result.openaiApiKey as string);
     });
 
     // Listen for storage changes to update UI if changed elsewhere
     const listener = (changes: any) => {
       if (changes.isActive) setIsActive(changes.isActive.newValue);
       if (changes.smacLogs) setLogs(changes.smacLogs.newValue);
+      if (changes.openaiApiKey) setApiKey(changes.openaiApiKey.newValue || '');
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
@@ -41,6 +46,17 @@ function App() {
     chrome.storage.local.set({ smacLogs: [] });
     setLogs([]);
   }
+
+  const saveApiKey = () => {
+    const trimmedKey = apiKey.trim();
+    if (trimmedKey && !trimmedKey.startsWith('sk-')) {
+      setKeySaveStatus('error');
+      return;
+    }
+    chrome.storage.local.set({ openaiApiKey: trimmedKey });
+    setKeySaveStatus('saved');
+    setTimeout(() => setKeySaveStatus('idle'), 2000);
+  };
 
   return (
     <div style={{ width: '360px', padding: '24px' }}>
@@ -116,11 +132,64 @@ function App() {
             <span>Clear History</span>
           </button>
         </div>
+
+        <div className="card" style={{ marginTop: '20px' }}>
+          <h3 style={{ margin: '0 0 12px 0', fontSize: '0.9rem', fontWeight: 600 }}>
+            Settings
+          </h3>
+          <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>
+            OpenAI API Key
+          </label>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={apiKey}
+              onChange={(e) => { setApiKey(e.target.value); setKeySaveStatus('idle'); }}
+              placeholder="sk-..."
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                borderRadius: '8px',
+                border: '1px solid rgba(255,255,255,0.1)',
+                background: 'rgba(255,255,255,0.05)',
+                color: 'white',
+                fontSize: '0.85rem',
+                fontFamily: 'monospace',
+                outline: 'none',
+              }}
+            />
+            <button
+              onClick={() => setShowKey(!showKey)}
+              className="btn-secondary"
+              style={{ padding: '8px 10px', fontSize: '0.8rem', minWidth: 'auto' }}
+              title={showKey ? 'Hide key' : 'Show key'}
+            >
+              {showKey ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          <button
+            onClick={saveApiKey}
+            className="btn-primary"
+            style={{ width: '100%', justifyContent: 'center', padding: '8px' }}
+          >
+            Save Key
+          </button>
+          {keySaveStatus === 'saved' && (
+            <p style={{ fontSize: '0.75rem', color: 'var(--success)', margin: '8px 0 0 0' }}>
+              Key saved successfully.
+            </p>
+          )}
+          {keySaveStatus === 'error' && (
+            <p style={{ fontSize: '0.75rem', color: 'var(--danger)', margin: '8px 0 0 0' }}>
+              Invalid key format. Must start with "sk-".
+            </p>
+          )}
+        </div>
       </main>
 
       <footer style={{ marginTop: '24px', textAlign: 'center' }}>
         <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>
-          Powered by Ollama (Llama 3.2 locally)
+          Powered by OpenAI (GPT-4o-mini)
         </p>
       </footer>
     </div>

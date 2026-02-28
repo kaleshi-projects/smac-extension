@@ -5,7 +5,8 @@
 
   color-scheme: light dark;
   color: rgba(255, 255, 255, 0.92);
-  background-color: #0F172A; /* Slate 900 */
+  background-color: #0F172A;
+  /* Slate 900 */
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -104,14 +105,36 @@ button:focus-visible {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  border: 2px solid rgba(255,255,255,0.1);
+  border: 2px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 0 10px currentColor;
 }
 
-.active { color: var(--success); }
-.inactive { color: var(--text-secondary); }
+.active {
+  color: var(--success);
+}
+
+.inactive {
+  color: var(--text-secondary);
+}
+
+input[type="text"],
+input[type="password"] {
+  transition: border-color 0.2s ease;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus {
+  border-color: var(--primary) !important;
+}
+
+input[type="text"]::placeholder,
+input[type="password"]::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
 
 @media (prefers-color-scheme: light) {
+
   /* For extension popups, we usually want to force a specific look, 
      but let's define light mode just in case */
   :root {
@@ -121,9 +144,20 @@ button:focus-visible {
     --surface-hover: #F1F5F9;
     --text-secondary: #64748B;
   }
-  body { background: #F8FAFC; }
-  .card { 
+
+  body {
+    background: #F8FAFC;
+  }
+
+  .card {
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
     border: 1px solid #E2E8F0;
+  }
+
+  input[type="text"],
+  input[type="password"] {
+    background: #F1F5F9 !important;
+    color: #0F172A !important;
+    border-color: #E2E8F0 !important;
   }
 }

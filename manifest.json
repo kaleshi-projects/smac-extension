@@ -12,7 +12,7 @@
         "clipboardWrite"
     ],
     "host_permissions": [
-        "http://localhost:11434/*",
+        "https://api.openai.com/*",
         "https://*.x.com/*",
         "https://*.twitter.com/*",
         "https://*.twimg.com/*",
