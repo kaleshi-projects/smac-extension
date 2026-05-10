@@ -1,38 +1,93 @@
-import { PLATFORMS, SELECTORS, detectPlatform } from '../utils/dom';
+import { MODES, PLATFORMS, SELECTORS, detectModeFromUrl, detectPlatform } from '../utils/dom.js';
+import { handlePostClick } from './modes/post.js';
+import { handleProfileClick } from './modes/profile.js';
+import { handleMessageClick } from './modes/message.js';
 
 // State
 let isActive = false;
 let currentPlatform = null;
+let currentMode = null;
+
+// Guard: returns false if the extension context was invalidated (tab open during reload)
+function isChromeContextValid() {
+    try {
+        return !!chrome?.runtime?.id;
+    } catch (e) {
+        return false;
+    }
+}
 
 // Initialize
 (async () => {
     currentPlatform = detectPlatform();
-    if (!currentPlatform) {
-        console.log('SMAC: Unsupported platform');
-        return;
-    }
+    if (!currentPlatform) return;
+    if (!isChromeContextValid()) return;
 
     await loadSettings();
-    console.log(`SMAC Extension: Loaded on ${currentPlatform.toUpperCase()}. State: ${isActive ? 'ACTIVE' : 'INACTIVE'}`);
-    injectToastContainer(); // Prepare toast UI
+    injectToastContainer();
+
+    // CRITICAL: detectMode MUST run before startObserver so currentMode is set
+    detectMode();
+
     if (isActive) {
         startObserver();
+        // Poll every 1.5s for 30s — LinkedIn lazy-loads posts long after DOM ready
+        let pollCount = 0;
+        const pollId = setInterval(() => {
+            if (!isActive || ++pollCount > 20) { clearInterval(pollId); return; }
+            injectButtons();
+        }, 1500);
     }
+
+    // Watch for SPA URL changes
+    let lastUrl = location.href;
+    new MutationObserver(() => {
+        const url = location.href;
+        if (url !== lastUrl) {
+            lastUrl = url;
+            onUrlChange();
+        }
+    }).observe(document, { subtree: true, childList: true });
 })();
 
 async function loadSettings() {
+    if (!isChromeContextValid()) return;
     const result = await chrome.storage.local.get(['isActive']);
     isActive = !!result.isActive;
 
     chrome.storage.onChanged.addListener((changes, namespace) => {
+        if (!isChromeContextValid()) return;
         if (namespace === 'local' && changes.isActive) {
             isActive = changes.isActive.newValue;
-            console.log(`SMAC Extension is now ${isActive ? 'ACTIVE' : 'INACTIVE'}`);
             if (isActive && currentPlatform) {
+                detectMode();
                 startObserver();
+            } else {
+                stopObserver();
+                removeButtons();
             }
         }
     });
+}
+
+function detectMode() {
+    currentMode = detectModeFromUrl(window.location.href, currentPlatform);
+}
+
+function onUrlChange() {
+    if (!isActive) return;
+    detectMode();
+    stopObserver();
+    removeButtons();
+    if (!currentMode) return;
+    startObserver();
+    // Inject immediately after mode switch, then retry for slow renders
+    injectButtons();
+    setTimeout(() => { if (isActive) injectButtons(); }, 1500);
+}
+
+function removeButtons() {
+    document.querySelectorAll('.smac-btn').forEach(b => b.remove());
 }
 
 function debounce(func, wait) {
@@ -43,278 +98,231 @@ function debounce(func, wait) {
     };
 }
 
+let observerInstance = null;
 function startObserver() {
-    if (!isActive || !currentPlatform) return;
+    if (!isActive || !currentPlatform || !currentMode) return;
 
-    // Inject buttons into existing posts
-    injectButtonsIntoPosts();
+    injectButtons();
 
-    // Watch for new posts using MutationObserver
     const debouncedInject = debounce(() => {
         if (!isActive) return;
-        injectButtonsIntoPosts();
+        injectButtons();
     }, 500);
 
-    const observer = new MutationObserver((mutations) => {
+    stopObserver();
+    
+    observerInstance = new MutationObserver((mutations) => {
         if (!isActive) return;
         if (mutations.some(m => m.addedNodes.length > 0)) {
             debouncedInject();
         }
     });
 
-    observer.observe(document.body, { childList: true, subtree: true });
+    observerInstance.observe(document.body, { childList: true, subtree: true });
 }
 
-// Inject "⚡ SMAC It" button into posts
-function injectButtonsIntoPosts() {
-    if (!isActive || !currentPlatform) return;
+function stopObserver() {
+    if (observerInstance) {
+        observerInstance.disconnect();
+        observerInstance = null;
+    }
+}
+
+function updateFloatingButton() {
+    const existing = document.getElementById('smac-floating-btn');
+    if (existing) existing.remove();
+
+    if (currentMode === MODES.POST || !currentMode) return;
+
+    const btn = document.createElement('button');
+    btn.id = 'smac-floating-btn';
+    btn.className = 'smac-btn smac-injected';
+    
+    const text = currentMode === MODES.PROFILE ? 'SMAC Profile' : 'SMAC Reply';
+    
+    btn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; margin-right: 6px;">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+        </svg>
+        <span>${text}</span>
+    `;
+    
+    btn.style.cssText = `
+        position: fixed; top: 72px; right: 16px; z-index: 2147483640;
+        background: linear-gradient(135deg, #8B5CF6 0%, #D946EF 100%);
+        color: white; border: none; padding: 8px 16px; border-radius: 99px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-size: 13px; font-weight: 600; cursor: pointer;
+        box-shadow: 0 4px 12px rgba(139,92,246,0.4);
+        display: flex; align-items: center; justify-content: center;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    `;
+    btn.onmouseenter = () => { btn.style.transform = 'translateY(-1px)'; btn.style.boxShadow = '0 6px 16px rgba(139,92,246,0.55)'; };
+    btn.onmouseleave = () => { btn.style.transform = ''; btn.style.boxShadow = '0 4px 12px rgba(139,92,246,0.4)'; };
+
+    if (currentMode === MODES.PROFILE) {
+        handleBtnClick(btn, () => handleProfileClick(currentPlatform));
+    } else if (currentMode === MODES.MESSAGE) {
+        handleBtnClick(btn, () => handleMessageClick(currentPlatform));
+    }
+
+    document.body.appendChild(btn);
+}
+
+const _pushState = history.pushState.bind(history);
+history.pushState = (...args) => {
+    _pushState(...args);
+    setTimeout(() => { if (isActive) onUrlChange(); }, 500);
+};
+window.addEventListener('popstate', () => setTimeout(() => { if (isActive) onUrlChange(); }, 500));
+
+function injectButtons() {
+    if (!isActive || !currentPlatform || !currentMode) return;
     if (!chrome.runtime?.id) return;
 
-    const config = SELECTORS[currentPlatform];
-    const posts = document.querySelectorAll(config.post);
-
-    posts.forEach((post) => {
-        // Skip if button already injected
-        if (post.querySelector('.smac-btn')) return;
-
-        // Skip video/audio posts (X-specific)
-        if (currentPlatform === PLATFORMS.X && hasMediaContent(post)) return;
-
-        // For LinkedIn, wait for action bar to be available
-        if (currentPlatform === PLATFORMS.LINKEDIN) {
-            const actionBar = post.querySelector(config.actionBar);
-            if (!actionBar) return;
-        }
-
-        // 1. Create the button with correct platform style
-        const btn = createSmacButton(currentPlatform);
-
-        // 2. Attach Click Handler
-        btn.addEventListener('click', async (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-
-            // Visual Feedback: Button State
-            const originalInnerHTML = btn.innerHTML;
-            btn.innerHTML = `<span style="animation: pulse 1s infinite">⏳</span>`;
-            btn.disabled = true;
-
-            // Visual Feedback: Toast
-            showToast('⏳ Reading post...', 'info');
-
-            try {
-                const comment = await analyzeAndGenerateComment(post);
-
-                if (comment) {
-                    // Output 1: Console log
-                    console.log('=== SMAC Generated Comment ===');
-                    console.log(comment);
-
-                    // Output 2: Copy to clipboard
-                    await navigator.clipboard.writeText(comment);
-
-                    // Visual feedback
-                    btn.innerHTML = originalInnerHTML;
-                    showToast('✅ Comment copied to clipboard!', 'success');
-                } else {
-                    btn.innerHTML = originalInnerHTML;
-                    showToast('⚠️ Skipped (No tech context)', 'warning');
-                }
-            } catch (err) {
-                console.error('SMAC Error:', err);
-                btn.innerHTML = originalInnerHTML;
-                showToast(`❌ Error: ${err.message || 'Unknown error'}`, 'error');
-            } finally {
-                btn.disabled = false;
-            }
-        });
-
-        // 3. Inject button based on platform
-        if (currentPlatform === PLATFORMS.X) {
-            // X: Absolute positioning in top-right of post
-            post.style.position = 'relative';
-            post.appendChild(btn);
-        } else if (currentPlatform === PLATFORMS.LINKEDIN) {
-            // LinkedIn: Insert as first child of action bar
-            const actionBar = post.querySelector(config.actionBar);
-            if (actionBar) {
-                btn.style.marginRight = '8px';
-                actionBar.insertBefore(btn, actionBar.firstChild);
-            }
-        }
-    });
+    if (currentMode === MODES.POST) {
+        injectPostButtons();
+    }
+    updateFloatingButton();
 }
 
-function createSmacButton(platform = PLATFORMS.X) {
+function createSmacButton(platform, isFloating = false) {
     const btn = document.createElement('button');
-    btn.className = 'smac-btn';
-
-    // Icon + Text
+    btn.className = 'smac-btn smac-injected';
+    // Use inline SVG only — no network requests, no chrome-extension:// URL fetches
     btn.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;">
-            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;flex-shrink:0">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
         </svg>
         <span>SMAC It</span>
     `;
 
-    if (platform === PLATFORMS.X) {
+    if (platform === PLATFORMS.X || isFloating) {
         btn.style.cssText = `
-            position: absolute;
-            top: 8px;
-            right: 8px;
             background: linear-gradient(135deg, #8B5CF6 0%, #D946EF 100%);
-            color: white;
-            border: none;
-            padding: 6px 14px;
-            border-radius: 99px;
+            color: white; border: none; padding: 6px 14px; border-radius: 99px;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            z-index: 9999;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            letter-spacing: 0.3px;
-            text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+            font-size: 13px; font-weight: 600; cursor: pointer; z-index: 9999;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); display: flex; align-items: center;
         `;
-
-        btn.addEventListener('mouseenter', () => {
-            btn.style.transform = 'translateY(-1px) scale(1.02)';
-            btn.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.15), 0 4px 6px -2px rgba(0, 0, 0, 0.1)';
-            btn.style.filter = 'brightness(1.1)';
-        });
-
-        btn.addEventListener('mouseleave', () => {
-            btn.style.transform = 'translateY(0) scale(1)';
-            btn.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)';
-            btn.style.filter = 'brightness(1)';
-        });
-
-    } else if (platform === PLATFORMS.LINKEDIN) {
+    } else {
         btn.style.cssText = `
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            background: transparent;
-            color: #8B5CF6; /* SMAC Purple */
-            border: 1.5px solid #8B5CF6;
-            padding: 6px 12px; /* Smaller padding */
-            border-radius: 16px; /* Less rounded than X */
-            font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            font-size: 14px; /* Slightly larger native text */
-            font-weight: 600;
-            cursor: pointer;
-            margin-right: 8px; /* Spacing */
-            transition: all 0.2s ease;
-            height: 32px; /* Match native button height roughly */
-            box-sizing: border-box;
+            display: inline-flex; align-items: center; justify-content: center;
+            background: transparent; color: #8B5CF6; border: 1.5px solid #8B5CF6;
+            padding: 6px 12px; border-radius: 16px; font-family: -apple-system, sans-serif;
+            font-size: 14px; font-weight: 600; cursor: pointer; margin-right: 8px; height: 32px;
         `;
+    }
 
-        // Update icon size/color for LinkedIn
-        const svg = btn.querySelector('svg');
-        if (svg) {
-            svg.setAttribute('width', '16');
-            svg.setAttribute('height', '16');
-            svg.style.marginRight = '6px';
-        }
-
-        btn.addEventListener('mouseenter', () => {
-            btn.style.backgroundColor = 'rgba(139, 92, 246, 0.1)'; // Light purple background
-            btn.style.borderColor = '#7C3AED';
-            btn.style.color = '#7C3AED';
-        });
-
-        btn.addEventListener('mouseleave', () => {
-            btn.style.backgroundColor = 'transparent';
-            btn.style.borderColor = '#8B5CF6';
-            btn.style.color = '#8B5CF6';
-        });
+    if (isFloating) {
+        btn.style.position = 'absolute';
     }
 
     return btn;
 }
 
-function hasMediaContent(post) {
-    return post.querySelector('video') !== null ||
-        post.querySelector('[data-testid="audioSpace"]') !== null ||
-        post.querySelector('[data-testid="voiceRecording"]') !== null ||
-        post.querySelector('[data-testid="videoPlayer"]') !== null ||
-        post.querySelector('[data-testid="videoComponent"]') !== null;
+function handleBtnClick(btn, handlerFn) {
+    btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (!isChromeContextValid()) {
+            showToast('⚠️ Extension was reloaded. Please refresh this tab.', 'error');
+            return;
+        }
+
+        const originalHTML = btn.innerHTML;
+        btn.innerHTML = `<span style="animation: pulse 1s infinite">⏳</span>`;
+        btn.disabled = true;
+
+        showToast('⏳ Generating...', 'info');
+
+        try {
+            const comment = await handlerFn();
+            if (comment) {
+                await navigator.clipboard.writeText(comment);
+                btn.innerHTML = originalHTML;
+                showToast('✅ Copied to clipboard!', 'success');
+            } else {
+                btn.innerHTML = originalHTML;
+            }
+        } catch (err) {
+            btn.innerHTML = originalHTML;
+            if (err.type === 'CORS') {
+                showToast(`❌ ${err.message}`, 'error');
+            } else {
+                showToast(`❌ Error: ${err.message}`, 'error');
+            }
+        } finally {
+            btn.disabled = false;
+        }
+    });
 }
 
-// Analyze post and return generated comment (or null if skipped)
-async function analyzeAndGenerateComment(post) {
-    const config = SELECTORS[currentPlatform];
-    const textEl = post.querySelector(config.text);
-    const imageEl = post.querySelector(config.image);
-    let imageUrl = imageEl ? imageEl.src : null;
 
-    if (imageUrl && !imageUrl.startsWith('http')) {
-        imageUrl = null;
+function findElement(selectors, parent = document) {
+    for (const selector of selectors) {
+        const el = parent.querySelector(selector);
+        if (el) return el;
     }
-
-    if (!textEl && !imageUrl) {
-        console.log('SMAC: No content to analyze');
-        return null;
-    }
-
-    const text = textEl ? textEl.innerText : "";
-
-    if (!chrome.runtime?.id) return null;
-
-    const response = await chrome.runtime.sendMessage({
-        action: 'ANALYZE_POST',
-        text,
-        imageUrl
-    });
-
-    if (response && response.success) {
-        if (response.comment === 'SKIP') {
-            console.log('SMAC: Post skipped (not tech-related)');
-            return null;
-        }
-        return response.comment;
-    } else if (response?.error) {
-        console.error('SMAC Analysis failed:', response.error);
-        throw new Error(response.error);
-    }
-
     return null;
 }
 
-// --- Toast Notification System ---
+function injectPostButtons() {
+    const s = SELECTORS[currentPlatform];
+    if (!s || !s.feedPost) return;
+
+    let posts = [];
+    for (const selector of s.feedPost) {
+        posts = Array.from(document.querySelectorAll(selector));
+        if (posts.length > 0) break;
+    }
+
+    if (posts.length === 0) return;
+
+    posts.forEach(post => {
+        if (post.querySelector('.smac-btn')) return;
+        if (currentPlatform === PLATFORMS.X && post.querySelector('video, [data-testid="audioSpace"]')) return;
+
+        const anchor = findElement(s.buttonAnchor, post);
+        
+        // For LinkedIn, we want the inline button without absolute positioning if anchor is found
+        const btn = createSmacButton(currentPlatform, !anchor && currentPlatform !== PLATFORMS.X);
+        handleBtnClick(btn, () => handlePostClick(post, currentPlatform));
+
+        if (currentPlatform === PLATFORMS.X) {
+            post.style.position = 'relative';
+            btn.style.top = '8px';
+            btn.style.right = '8px';
+            btn.style.position = 'absolute';
+            post.appendChild(btn);
+        } else {
+            if (anchor) {
+                anchor.appendChild(btn);
+            } else {
+                post.style.position = 'relative';
+                btn.style.cssText += 'position:absolute;top:8px;right:8px;z-index:999;';
+                post.appendChild(btn);
+            }
+        }
+    });
+}
+
+
+
 function injectToastContainer() {
     if (document.getElementById('smac-toast-container')) return;
-
     const container = document.createElement('div');
     container.id = 'smac-toast-container';
-    container.style.cssText = `
-        position: fixed;
-        bottom: 24px;
-        right: 24px;
-        z-index: 2147483647;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        pointer-events: none;
-    `;
-    document.body.appendChild(container);
-
-    // Inject styles for toast animation
+    container.style.cssText = `position: fixed; bottom: 24px; right: 24px; z-index: 2147483647; display: flex; flex-direction: column; gap: 10px; pointer-events: none;`;
+    
     const style = document.createElement('style');
     style.textContent = `
-        @keyframes smac-slide-in {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-        @keyframes smac-fade-out {
-            from { opacity: 1; }
-            to { opacity: 0; }
-        }
+        @keyframes smac-slide-in { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes smac-fade-out { from { opacity: 1; } to { opacity: 0; } }
     `;
     document.head.appendChild(style);
+    document.body.appendChild(container);
 }
 
 function showToast(message, type = 'info') {
@@ -322,36 +330,14 @@ function showToast(message, type = 'info') {
     if (!container) return;
 
     const toast = document.createElement('div');
-
-    let bg = '#1e293b';
-    let icon = 'ℹ️';
-
+    let bg = '#1e293b'; let icon = 'ℹ️';
     if (type === 'success') { bg = '#10B981'; icon = '✅'; }
     if (type === 'error') { bg = '#EF4444'; icon = '❌'; }
-    if (type === 'warning') { bg = '#F59E0B'; icon = '⚠️'; }
-
-    toast.style.cssText = `
-        background: ${bg};
-        color: white;
-        padding: 12px 20px;
-        border-radius: 8px;
-        font-family: -apple-system, sans-serif;
-        font-size: 14px;
-        font-weight: 500;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        animation: smac-slide-in 0.3s ease-out;
-        pointer-events: auto;
-        min-width: 250px;
-    `;
-
+    
+    toast.style.cssText = `background: ${bg}; color: white; padding: 12px 20px; border-radius: 8px; font-family: -apple-system, sans-serif; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px; min-width: 250px; pointer-events: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15); animation: smac-slide-in 0.3s ease-out;`;
     toast.innerHTML = `<span>${icon}</span> <span>${message}</span>`;
-
     container.appendChild(toast);
-
-    // Auto remove
+    
     setTimeout(() => {
         toast.style.animation = 'smac-fade-out 0.3s ease-in forwards';
         setTimeout(() => toast.remove(), 300);

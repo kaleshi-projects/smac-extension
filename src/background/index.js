@@ -1,199 +1,219 @@
-// Background script for SMAC Extension (X.com only)
-// Optimized for RTX 3050 6GB VRAM with llava-phi3
+import { encryptKey, decryptKey } from './crypto.js';
+import { captureAndCrop } from './screenshot.js';
+import { runOllama } from './backends/ollama.js';
+import { runRemote } from './backends/remote.js';
 
-const OLLAMA_API_URL = 'http://localhost:11434/api/generate';
-const MODEL_NAME = 'llava-phi3:latest';
-const IMAGE_TIMEOUT_MS = 5000;
-const MAX_COMMENT_LENGTH = 280; // Twitter character limit
+function cleanResponse(text) {
+    if (!text) return 'SKIP';
+    let cleaned = text.trim();
+    if (cleaned.toUpperCase() === 'SKIP') return 'SKIP';
 
-const SYSTEM_PROMPT = `Role: You are a highly experienced Senior Software Engineer trapped in the body of a 2nd-year College Student. 
-Vibe: You have 10+ years of deep technical knowledge (System Design, Scalability, Low-level logic), but you speak casually like a Gen-Z coder. You are "The Prodigy."
+    cleaned = cleaned.replace(/```[\w]*\n?/g, '');
+    cleaned = cleaned.replace(/```/g, '');
+    cleaned = cleaned.replace(/`/g, '');
+    cleaned = cleaned.replace(/^(Comment|Response|Reply|Output):\s*/i, '');
+    cleaned = cleaned.replace(/[\s.,;:!"']*[Ss][Kk][Ii][Pp][\s.,;:!"']*$/g, '');
+    cleaned = cleaned.replace(/\s+Skip\s*$/gi, '');
+    cleaned = cleaned.replace(/\.\s*Skip\s*$/gi, '.');
+    cleaned = cleaned.replace(/^Skip\s+/gi, '');
+    cleaned = cleaned.replace(/^SKIP\s+/gi, '');
+    cleaned = cleaned.trim();
+    cleaned = cleaned.replace(/^["'"'"'`]+|["'"'"'`]+$/g, '');
+    cleaned = cleaned.trim();
 
-Task: Write a comment on this social media post.
+    if (!cleaned || cleaned.length < 5) return 'SKIP';
+    return cleaned;
+}
 
-STRICT OUTPUT RULES:
-- Output ONLY plain text. NO markdown, NO code blocks, NO backticks, NO quotes around text.
-- Keep comment under 280 characters (Twitter limit).
-- Just write the comment directly. Nothing else.
+function buildPrompt(payload) {
+    if (payload.mode === 'post') {
+        return `You are a Senior Software Engineer with strong communication skills and a professional-yet-warm tone.
 
-CORE PHILOSOPHY:
-1. Insight over Hype: Add value. Spot the tech stack or pain point.
-2. The "Senior" Eye: Notice details. Ask about state management, image size, etc.
-3. Casual Delivery: lowercase preferred. Minimal punctuation.
-4. No "Bot" Words: Banned: "commendable", "insightful", "journey", "essential", "landscape", "fostering", "kudos".
-5. Empathy for Pain: Connect through shared struggle.
+Post text: ${payload.text}
+${payload.hasImage ? 'The post also contains an image (attached). Incorporate relevant visual details when they are genuinely useful.' : ''}
 
-STRUCTURE OPTIONS:
-- Relatable Senior: "centering divs is still harder than reversing a binary tree tbh."
-- Curious Architect: "clean ui. are you using tailwind or styled-components?"
-- Code Reviewer: "that error handling logic is actually so clean. nice."
+Task: Write a ${payload.intentLabel} comment. 2-4 sentences. Human and specific. No "Great post!" openers.
 
-EXAMPLES:
-- Post: "Finally deployed my app!" -> deployment feels better than sex. vercel or aws?
-- Post: "Learning Rust." -> borrow checker is gonna humble you for a week but memory safety is worth it. gl.
-- Post: "Looking for open source contributors." -> repo link? might check the issues tab this weekend.
+No markdown, no hashtags. Return ONLY the comment text.`;
+    }
 
-SKIP RULE: If the post is a selfie without tech context, motivational quote, politics, or spam -> output exactly: SKIP
-Output ONLY the comment OR SKIP. No quotes, no markdown, no explanations.`;
+    if (payload.mode === 'profile') {
+        return `You are a thoughtful professional who writes personalised outreach messages.
 
-// Reset state on install/startup
-chrome.runtime.onInstalled.addListener(() => {
-    chrome.storage.local.set({ isActive: false });
-    console.log('SMAC: Extension installed - State reset to Inactive');
+You have read the following profile information:
+${payload.text}
+
+Your task: Write a ${payload.intentLabel} outreach message to this person. It must:
+- Reference at least one specific detail from their profile (post, role, project, or opinion)
+- Feel warm and genuine - not salesy or templated
+- Be 3-5 sentences maximum
+- Never mention that you "came across their profile" or use similar cliches
+- Contain no markdown formatting
+
+Return ONLY the message text. No subject line, no greeting prefix.`;
+    }
+
+    if (payload.mode === 'message') {
+        if (payload.isEmptyThread) {
+            return `You are helping someone start a new conversation on a professional social network.
+
+Context:
+${payload.text}
+
+Your task: Write a ${payload.intentLabel} opener from the perspective of "You". It must:
+- Sound natural and specific, not templated
+- Be concise - usually 1 to 3 sentences
+- Fit a professional networking context
+- Give the recipient a clear reason to respond
+
+Return ONLY the message text.`;
+        }
+
+        return `You are helping someone respond in a messaging thread on a professional social network.
+
+Conversation history (most recent last):
+${payload.text}
+
+Your task: Write a ${payload.intentLabel} message from the perspective of "You". It must:
+- Match the existing conversational tone in the thread
+- Be concise - usually 1 to 3 sentences
+- Sound fully human - no AI giveaways, no stiff corporate language
+- Require no editing before sending
+
+Return ONLY the message text.`;
+    }
+
+    return '';
+}
+
+chrome.runtime.onInstalled.addListener((details) => {
+    if (details.reason === 'install') {
+        chrome.storage.local.remove(['encryptedApiKey', 'apiKeyIv'], () => {
+            chrome.storage.local.set({ isActive: false });
+        });
+    }
 });
 
-chrome.runtime.onStartup.addListener(() => {
-    chrome.storage.local.set({ isActive: false });
-    console.log('SMAC: Browser startup - State reset to Inactive');
-});
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+    void _sender;
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'ANALYZE_POST') {
-        handleAnalysis(request.text, request.imageUrl, sendResponse);
+    if (request.action === 'GENERATE_AI_RESPONSE') {
+        handleGeneration(request.payload)
+            .then(sendResponse)
+            .catch((error) => {
+                sendResponse({ success: false, error: formatRuntimeError(error) });
+            });
+        return true;
+    }
+
+    if (request.action === 'ENCRYPT_AND_SAVE_KEY') {
+        encryptKey(request.key)
+            .then((encrypted) => {
+                if (!encrypted) {
+                    throw createRuntimeError('CONFIG', 'Please enter an API key.');
+                }
+
+                chrome.storage.local.set({
+                    encryptedApiKey: encrypted.ciphertext,
+                    apiKeyIv: encrypted.iv
+                }, () => {
+                    sendResponse({ success: true });
+                });
+            })
+            .catch((error) => {
+                sendResponse({ success: false, error: formatRuntimeError(error) });
+            });
+        return true;
+    }
+
+    if (request.action === 'CLEAR_API_KEY') {
+        chrome.storage.local.remove(['encryptedApiKey', 'apiKeyIv'], () => {
+            sendResponse({ success: true });
+        });
         return true;
     }
 });
 
-async function handleAnalysis(postText, imageUrl, sendResponse) {
-    try {
-        let images = [];
-        let prompt = `${SYSTEM_PROMPT}\n\nPost:\n${postText}\n\nComment:`;
+async function handleGeneration(payload) {
+    let imageBase64 = null;
 
-        if (imageUrl && imageUrl.startsWith('http')) {
-            console.log('SMAC: Fetching image:', imageUrl);
-            try {
-                // Attempt to fetch image, but don't let it fail the whole request
-                const base64Image = await fetchImageWithTimeout(imageUrl, IMAGE_TIMEOUT_MS);
-                if (base64Image) {
-                    images = [base64Image];
-                    prompt = `${SYSTEM_PROMPT}\n\nAnalyze this image and text:\n${postText}\n\nComment:`;
-                }
-            } catch (e) {
-                console.warn('SMAC: Image fetch failed or timed out, PROCEEDING WITH TEXT ONLY:', e.message);
-                // Fallback to text only prompt is already set (initial value of 'prompt')
-            }
-        }
-
-        console.log('SMAC: Sending request to Ollama...');
-        const response = await fetch(OLLAMA_API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: MODEL_NAME,
-                prompt: prompt,
-                images: images.length > 0 ? images : undefined,
-                stream: false,
-                options: {
-                    num_ctx: 2048
-                }
-            }),
-        });
-
-        if (!response.ok) {
-            // Check if it's a connection error
-            throw new Error(`Ollama API Error (${response.status}). Is Ollama running?`);
-        }
-
-        const data = await response.json();
-        let generatedText = data.response?.trim() || 'SKIP';
-
-        // Clean up the response - remove any markdown or formatting
-        generatedText = cleanResponse(generatedText);
-
-        // Enforce character limit
-        if (generatedText !== 'SKIP' && generatedText.length > MAX_COMMENT_LENGTH) {
-            generatedText = generatedText.substring(0, MAX_COMMENT_LENGTH - 3) + '...';
-        }
-
-        sendResponse({ success: true, comment: generatedText });
-    } catch (error) {
-        console.error('SMAC Ollama Error:', error);
-        // Differentiate between Ollama errors and others
-        let msg = error.message;
-        if (msg.includes('Failed to fetch')) {
-            msg = 'Could not connect to Ollama (localhost:11434). Is it running?';
-        }
-        sendResponse({ success: false, error: msg });
+    if (payload.mode === 'post' && payload.coords) {
+        imageBase64 = await captureAndCrop(payload.coords);
     }
+
+    payload.hasImage = !!imageBase64;
+    const promptText = buildPrompt(payload);
+
+    const settings = await chrome.storage.local.get([
+        'useRemote',
+        'remoteEndpoint',
+        'remoteModel',
+        'localModel',
+        'encryptedApiKey',
+        'apiKeyIv'
+    ]);
+
+    const useRemote = !!settings.useRemote;
+    const localModel = typeof settings.localModel === 'string' ? settings.localModel.trim() : '';
+    const remoteEndpoint = typeof settings.remoteEndpoint === 'string' ? settings.remoteEndpoint.trim() : '';
+    const remoteModel = typeof settings.remoteModel === 'string' ? settings.remoteModel.trim() : '';
+
+    let resultText = '';
+
+    if (useRemote) {
+        if (!remoteEndpoint) {
+            throw createRuntimeError('CONFIG', 'Please enter a remote API endpoint in the popup.');
+        }
+        if (!remoteModel) {
+            throw createRuntimeError('CONFIG', 'Please enter a remote model name in the popup.');
+        }
+
+        const apiKey = await decryptKey(settings.apiKeyIv, settings.encryptedApiKey);
+        if (!apiKey) {
+            throw createRuntimeError('CONFIG', 'Remote API key not configured. Save your key in the popup first.');
+        }
+
+        resultText = await runRemote(
+            apiKey,
+            remoteEndpoint,
+            remoteModel,
+            promptText,
+            imageBase64
+        );
+    } else {
+        if (!localModel) {
+            throw createRuntimeError('CONFIG', 'No local model configured. Open the SMAC popup and enter a model name.');
+        }
+
+        resultText = await runOllama(
+            localModel,
+            promptText,
+            imageBase64
+        );
+    }
+
+    const cleaned = cleanResponse(resultText);
+    if (cleaned === 'SKIP') {
+        throw createRuntimeError('EMPTY_RESPONSE', 'The model returned an empty response. Try a different intent.');
+    }
+
+    return { success: true, comment: cleaned };
 }
 
-// Clean up AI response - remove markdown, code blocks, quotes, etc.
-function cleanResponse(text) {
-    if (!text) return 'SKIP';
-
-    let cleaned = text.trim();
-
-    // If just SKIP, return early
-    if (cleaned.toUpperCase() === 'SKIP') return 'SKIP';
-
-    // Remove code blocks with language specifier
-    cleaned = cleaned.replace(/```[\w]*\n?/g, '');
-    cleaned = cleaned.replace(/```/g, '');
-
-    // Remove inline code backticks
-    cleaned = cleaned.replace(/`/g, '');
-
-    // Remove "Comment:" or similar prefixes
-    cleaned = cleaned.replace(/^(Comment|Response|Reply|Output):\s*/i, '');
-
-    // Remove trailing "SKIP" or "Skip" (sometimes AI adds SKIP at end)
-    cleaned = cleaned.replace(/[\s.,;:!"']*[Ss][Kk][Ii][Pp][\s.,;:!"']*$/g, '');
-    cleaned = cleaned.replace(/\s+Skip\s*$/gi, '');
-    cleaned = cleaned.replace(/\.\s*Skip\s*$/gi, '.');
-
-    // Remove leading "Skip" (sometimes AI puts Skip at start)
-    cleaned = cleaned.replace(/^Skip\s+/gi, '');
-    cleaned = cleaned.replace(/^SKIP\s+/gi, '');
-
-    // Remove all types of surrounding quotes (multiple passes)
-    cleaned = cleaned.trim();
-    cleaned = cleaned.replace(/^["'"'"'`]+|["'"'"'`]+$/g, '');
-    cleaned = cleaned.trim();
-    cleaned = cleaned.replace(/^["'"'"'`]+|["'"'"'`]+$/g, '');
-
-    // Remove leading/trailing whitespace and newlines
-    cleaned = cleaned.trim();
-
-    // If mostly empty after cleanup, return SKIP
-    if (!cleaned || cleaned.length < 5) {
-        return 'SKIP';
-    }
-
-    return cleaned;
+function createRuntimeError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
 }
 
-async function fetchImageWithTimeout(url, timeoutMs) {
-    if (!url || typeof url !== 'string' || !url.startsWith('http')) {
-        throw new Error(`Invalid image URL: ${url}`);
+function formatRuntimeError(error) {
+    if (error?.code === 'CORS') {
+        return { type: 'CORS', message: error.message };
     }
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-        const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-            throw new Error(`Image fetch failed: ${response.statusText}`);
-        }
-
-        const blob = await response.blob();
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                const result = reader.result.toString();
-                const base64String = result.includes(',') ? result.split(',')[1] : result;
-                resolve(base64String);
-            };
-            reader.onerror = () => reject(new Error('FileReader error'));
-            reader.readAsDataURL(blob);
-        });
-    } catch (error) {
-        clearTimeout(timeoutId);
-        if (error.name === 'AbortError') {
-            throw new Error('Image fetch timed out');
-        }
-        throw error;
+    if (error?.message) {
+        return error.message;
     }
+
+    return 'Unknown error.';
 }
