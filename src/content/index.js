@@ -31,6 +31,7 @@ function isChromeContextValid() {
 
     if (isActive) {
         startObserver();
+        setTimeout(logSelectorHealth, 3000);
         // Poll every 1.5s for 30s — LinkedIn lazy-loads posts long after DOM ready
         let pollCount = 0;
         const pollId = setInterval(() => {
@@ -186,9 +187,30 @@ function injectButtons() {
     updateFloatingButton();
 }
 
+function logSelectorHealth() {
+    if (!currentPlatform || currentMode !== 'post') return;
+    const s = SELECTORS[currentPlatform];
+    const postMatches = [];
+
+    for (const selector of s.feedPost || []) {
+        const count = countSelectorMatches(selector);
+        if (count > 0) {
+            console.log(`[SMAC] Post selector working: ${selector} (${count})`);
+            postMatches.push(selector);
+        }
+    }
+
+    const anchorCount = countSelectors(s.buttonAnchor || []);
+    if (postMatches.length === 0 && anchorCount === 0) {
+        console.warn('[SMAC] No post or anchor selector matched. LinkedIn DOM may have changed.');
+        showToast('⚠️ SMAC: Post buttons unavailable — LinkedIn updated their layout.', 'error');
+    }
+}
+
 function createSmacButton(platform, isFloating = false) {
     const btn = document.createElement('button');
     btn.className = 'smac-btn smac-injected';
+    btn.type = 'button';
     // Use inline SVG only — no network requests, no chrome-extension:// URL fetches
     btn.innerHTML = `
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;flex-shrink:0">
@@ -208,9 +230,11 @@ function createSmacButton(platform, isFloating = false) {
     } else {
         btn.style.cssText = `
             display: inline-flex; align-items: center; justify-content: center;
-            background: transparent; color: #8B5CF6; border: 1.5px solid #8B5CF6;
-            padding: 6px 12px; border-radius: 16px; font-family: -apple-system, sans-serif;
-            font-size: 14px; font-weight: 600; cursor: pointer; margin-right: 8px; height: 32px;
+            background: linear-gradient(135deg, #8B5CF6 0%, #D946EF 100%);
+            color: white; border: none; box-shadow: 0 8px 18px rgba(139,92,246,0.28);
+            padding: 7px 14px; border-radius: 999px; font-family: -apple-system, sans-serif;
+            font-size: 13px; font-weight: 700; cursor: pointer; height: 34px;
+            white-space: nowrap;
         `;
     }
 
@@ -268,44 +292,115 @@ function findElement(selectors, parent = document) {
     return null;
 }
 
-function injectPostButtons() {
-    const s = SELECTORS[currentPlatform];
-    if (!s || !s.feedPost) return;
+const processedPosts = new WeakSet();
 
-    let posts = [];
-    for (const selector of s.feedPost) {
-        posts = Array.from(document.querySelectorAll(selector));
-        if (posts.length > 0) break;
+function injectPostButtons() {
+  const s = SELECTORS[currentPlatform];
+  if (!s || !s.feedPost) return;
+
+  let posts = [];
+  for (const selector of s.feedPost) {
+    const found = Array.from(document.querySelectorAll(selector));
+    if (found.length > 0) { posts = found; break; }
+  }
+
+  if (posts.length === 0) {
+    if (!window._smacNoPostWarned) {
+      window._smacNoPostWarned = true;
+      showToast('SMAC: No posts found — update wrapper selectors', 'error');
+    }
+    return;
+  }
+
+  posts.forEach(post => {
+    if (processedPosts.has(post)) return;
+    processedPosts.add(post);
+
+    let anchor = null;
+    for (const sel of s.buttonAnchor) {
+      anchor = post.querySelector(sel);
+      if (anchor) break;
     }
 
-    if (posts.length === 0) return;
+    const btn = createSmacButton(currentPlatform);
+    handleBtnClick(btn, () => handlePostClick(post, currentPlatform));
 
-    posts.forEach(post => {
-        if (post.querySelector('.smac-btn')) return;
-        if (currentPlatform === PLATFORMS.X && post.querySelector('video, [data-testid="audioSpace"]')) return;
+    if (anchor) {
+      anchor.appendChild(btn);
+    } else {
+      // Fallback: Force button into the top-right of the main post wrapper
+      post.style.position = 'relative';
+      btn.style.cssText += ';position:absolute;top:12px;right:12px;z-index:999;';
+      post.appendChild(btn);
+    }
+  });
+}
 
-        const anchor = findElement(s.buttonAnchor, post);
-        
-        // For LinkedIn, we want the inline button without absolute positioning if anchor is found
-        const btn = createSmacButton(currentPlatform, !anchor && currentPlatform !== PLATFORMS.X);
-        handleBtnClick(btn, () => handlePostClick(post, currentPlatform));
+function resolvePostContainer(node) {
+    if (currentPlatform !== PLATFORMS.LINKEDIN) {
+        return node;
+    }
 
-        if (currentPlatform === PLATFORMS.X) {
-            post.style.position = 'relative';
-            btn.style.top = '8px';
-            btn.style.right = '8px';
-            btn.style.position = 'absolute';
-            post.appendChild(btn);
-        } else {
-            if (anchor) {
-                anchor.appendChild(btn);
-            } else {
-                post.style.position = 'relative';
-                btn.style.cssText += 'position:absolute;top:8px;right:8px;z-index:999;';
-                post.appendChild(btn);
+    return node.closest(
+        '.feed-shared-update-v2, .feed-shared-update-v2__content-wrapper, .fie-impression-container, .occludable-update, article, [data-id^="urn:li:activity"], [data-urn^="urn:li:activity"]'
+    ) || node;
+}
+
+function collectPostCandidates(selectors) {
+    const candidates = [];
+    const seen = new Set();
+
+    for (const selector of selectors.feedPost || []) {
+        try {
+            for (const node of document.querySelectorAll(selector)) {
+                const post = resolvePostContainer(node);
+                if (post && !seen.has(post)) {
+                    seen.add(post);
+                    candidates.push(post);
+                }
             }
+        } catch {
+            continue;
         }
-    });
+    }
+
+    if (candidates.length > 0 || currentPlatform !== PLATFORMS.LINKEDIN) {
+        return candidates;
+    }
+
+    for (const selector of selectors.buttonAnchor || []) {
+        try {
+            for (const anchor of document.querySelectorAll(selector)) {
+                const post = resolvePostContainer(anchor);
+                if (!post || seen.has(post)) {
+                    continue;
+                }
+
+                seen.add(post);
+                candidates.push(post);
+            }
+        } catch {
+            continue;
+        }
+    }
+
+    return candidates;
+}
+
+function countSelectors(selectors) {
+    let total = 0;
+    for (const selector of selectors) {
+        total += countSelectorMatches(selector);
+    }
+    return total;
+}
+
+function countSelectorMatches(selector) {
+    try {
+        return document.querySelectorAll(selector).length;
+    } catch {
+        return 0;
+    }
 }
 
 

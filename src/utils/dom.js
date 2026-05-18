@@ -32,28 +32,41 @@ export const SELECTORS = {
         postImage: ['[data-testid="tweetPhoto"] img'],
         buttonAnchor: ['[role="group"]'],
         profile: {
-            header: '[data-testid="UserProfileHeader_Items"]',
-            userName: '[data-testid="UserName"]',
-            bio: '[data-testid="UserDescription"]',
-            tweets: 'article[data-testid="tweet"] [data-testid="tweetText"]'
+            header: ['[data-testid="UserProfileHeader_Items"]'],
+            userName: ['[data-testid="UserName"]'],
+            bio: ['[data-testid="UserDescription"]'],
+            tweets: ['article[data-testid="tweet"] [data-testid="tweetText"]']
         },
         message: {
             container: '[data-testid="messageEntry"]',
-            text: '[data-testid="messageEntry"] div[dir="auto"]'
+            text: '[data-testid="messageEntry"] div[dir="auto"]',
+            recipientName: [
+                'header [data-testid="UserName"]',
+                '[data-testid="conversation"] [data-testid="UserName"]',
+                '[data-testid="DMDrawer"] [data-testid="UserName"]'
+            ],
+            recipientMeta: [
+                'header [data-testid="UserDescription"]',
+                '[data-testid="conversation"] [dir="ltr"]',
+                '[data-testid="DMDrawer"] [dir="ltr"]'
+            ]
         }
     },
     [PLATFORMS.LINKEDIN]: {
         feedPost: [
+            '.fie-impression-container',            
+            '[data-finite-scroll-hotspot]',
             '[data-id^="urn:li:activity"]',
             '[data-urn^="urn:li:activity"]',
             '.feed-shared-update-v2',
             '.occludable-update',
         ],
         postText: [
+            '.update-components-text__text-view',
             '.feed-shared-update-v2__description',
+            '.update-components-text',
             '.feed-shared-text',
             '[data-test-id="main-feed-activity-card__commentary"]',
-            '.update-components-text',
         ],
         postAuthor: [
             '.update-components-actor__title span[aria-hidden="true"]',
@@ -62,22 +75,57 @@ export const SELECTORS = {
         ],
         postImage: ['.feed-shared-image img', '.update-components-image img'],
         buttonAnchor: [
-            '.social-details-social-activity', 
-            '.feed-shared-social-action-bar', 
-            '.feed-shared-social-actions', 
-            '.feed-shared-control-bar'
+            '.update-v2-social-activity',
+            '.social-details-social-activity',
+            '.feed-shared-social-action-bar',
+            '.feed-shared-footer',
         ],
         profile: {
-            name: '.text-heading-xlarge',
-            headline: '.text-body-medium.break-words',
-            about: '#about ~ .pvs-list__outer-container, .pv-about-section',
-            featured: '#featured ~ .pvs-list__outer-container, .pv-featured-section',
-            experience: '#experience ~ .pvs-list__outer-container li',
-            posts: '.profile-creator-shared-feed-update__container .update-components-text'
+            name: [
+                '.text-heading-xlarge',
+                'h1'
+            ],
+            headline: [
+                '.text-body-medium.break-words',
+                '.pv-text-details__left-panel .text-body-medium'
+            ],
+            location: [
+                '[data-generated-suggestion-target] span[aria-hidden="true"]',
+                '.pv-text-details__left-panel .text-body-small'
+            ],
+            about: [
+                '#about ~ .pvs-list__outer-container .inline-show-more-text span[aria-hidden="true"]',
+                '#about ~ .pvs-list__outer-container',
+                '.pv-about-section'
+            ],
+            featured: [
+                '#featured ~ .pvs-list__outer-container',
+                '.pv-featured-section'
+            ],
+            experience: [
+                '#experience ~ .pvs-list__outer-container li',
+                '.pvs-list__outer-container li .mr1 span[aria-hidden="true"]'
+            ],
+            posts: [
+                '.profile-creator-shared-feed-update__container .update-components-text',
+                '.profile-creator-shared-feed-update__container',
+                '.feed-shared-update-v2__content-wrapper'
+            ],
         },
         message: {
             container: '.msg-s-message-list__event, .msg-s-event-listitem',
-            text: '.msg-s-event-listitem__body, .msg-s-event-listitem__message-bubble, .msg-s-message-group__body'
+            text: '.msg-s-event-listitem__body, .msg-s-event-listitem__message-bubble, .msg-s-message-group__body',
+            recipientName: [
+                '.msg-thread__link-to-profile .hoverable-link-text',
+                '.msg-thread__link-to-profile',
+                '.msg-thread__topic-name',
+                '.artdeco-entity-lockup__title span[aria-hidden="true"]'
+            ],
+            recipientMeta: [
+                '.msg-thread__topic-subtext',
+                '.artdeco-entity-lockup__subtitle span[aria-hidden="true"]',
+                '.msg-thread__link-to-profile + div'
+            ]
         }
     }
 };

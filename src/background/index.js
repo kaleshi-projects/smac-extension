@@ -29,58 +29,54 @@ function buildPrompt(payload) {
     if (payload.mode === 'post') {
         return `You are a Senior Software Engineer with strong communication skills and a professional-yet-warm tone.
 
-Post text: ${payload.text}
-${payload.hasImage ? 'The post also contains an image (attached). Incorporate relevant visual details when they are genuinely useful.' : ''}
+Post text:
+${payload.text}
+${payload.hasImage ? 'A cropped screenshot of the post is also attached. Use it only if it adds genuinely useful context.' : ''}
 
 Task: Write a ${payload.intentLabel} comment. 2-4 sentences. Human and specific. No "Great post!" openers.
 
-No markdown, no hashtags. Return ONLY the comment text.`;
+Use details from the post when possible. No markdown, no hashtags, no placeholders, no square brackets.
+Return ONLY the comment text.`;
     }
 
     if (payload.mode === 'profile') {
-        return `You are a thoughtful professional who writes personalised outreach messages.
+        return `You are writing a LinkedIn outreach message.
 
-You have read the following profile information:
+Profile you read:
 ${payload.text}
 
-Your task: Write a ${payload.intentLabel} outreach message to this person. It must:
-- Reference at least one specific detail from their profile (post, role, project, or opinion)
-- Feel warm and genuine - not salesy or templated
-- Be 3-5 sentences maximum
-- Never mention that you "came across their profile" or use similar cliches
-- Contain no markdown formatting
+Task: Write a ${payload.intentLabel} message to this person.
 
-Return ONLY the message text. No subject line, no greeting prefix.`;
+STRICT RULES:
+1. Use their ACTUAL name from the profile above — never write [Name]
+2. Reference ONE specific real detail: their actual job title, company, a post topic, a skill
+3. NEVER use [Company], [Topic], [Specific Industry Trend] or any bracket placeholder
+4. NEVER say "I came across your profile" or "I noticed your impressive work"
+5. 3-4 sentences. Warm and direct, not salesy
+6. No markdown, no subject line
+
+Return ONLY the message. Nothing else.`;
     }
 
     if (payload.mode === 'message') {
-        if (payload.isEmptyThread) {
-            return `You are helping someone start a new conversation on a professional social network.
+        return `You are composing a message in a LinkedIn DM thread.
 
-Context:
+Conversation (oldest first, most recent last):
 ${payload.text}
 
-Your task: Write a ${payload.intentLabel} opener from the perspective of "You". It must:
-- Sound natural and specific, not templated
-- Be concise - usually 1 to 3 sentences
-- Fit a professional networking context
-- Give the recipient a clear reason to respond
+The LAST message above is what you must respond to.
 
-Return ONLY the message text.`;
-        }
+Task: Write a ${payload.intentLabel} reply from "You".
 
-        return `You are helping someone respond in a messaging thread on a professional social network.
+STRICT RULES — violating any of these makes the output unusable:
+1. Read the actual last message and respond to its specific content
+2. Use the real name of the person if it appears in the thread — NEVER write [Name]
+3. Reference what was actually said — a specific question, offer, or statement
+4. NEVER use brackets like [Company], [Topic], [Specific Detail]
+5. 1-3 sentences. Match the conversational tone (casual if they are casual)
+6. Sound like a real person replying, not a template
 
-Conversation history (most recent last):
-${payload.text}
-
-Your task: Write a ${payload.intentLabel} message from the perspective of "You". It must:
-- Match the existing conversational tone in the thread
-- Be concise - usually 1 to 3 sentences
-- Sound fully human - no AI giveaways, no stiff corporate language
-- Require no editing before sending
-
-Return ONLY the message text.`;
+Return ONLY the message text. Nothing else.`;
     }
 
     return '';
@@ -137,13 +133,6 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 async function handleGeneration(payload) {
     let imageBase64 = null;
 
-    if (payload.mode === 'post' && payload.coords) {
-        imageBase64 = await captureAndCrop(payload.coords);
-    }
-
-    payload.hasImage = !!imageBase64;
-    const promptText = buildPrompt(payload);
-
     const settings = await chrome.storage.local.get([
         'useRemote',
         'remoteEndpoint',
@@ -157,6 +146,13 @@ async function handleGeneration(payload) {
     const localModel = typeof settings.localModel === 'string' ? settings.localModel.trim() : '';
     const remoteEndpoint = typeof settings.remoteEndpoint === 'string' ? settings.remoteEndpoint.trim() : '';
     const remoteModel = typeof settings.remoteModel === 'string' ? settings.remoteModel.trim() : '';
+
+    if (payload.mode === 'post' && payload.coords && shouldAttachImage(useRemote, localModel, remoteModel, remoteEndpoint)) {
+        imageBase64 = await captureAndCrop(payload.coords);
+    }
+
+    payload.hasImage = !!imageBase64;
+    const promptText = buildPrompt(payload);
 
     let resultText = '';
 
@@ -194,10 +190,122 @@ async function handleGeneration(payload) {
 
     const cleaned = cleanResponse(resultText);
     if (cleaned === 'SKIP') {
-        throw createRuntimeError('EMPTY_RESPONSE', 'The model returned an empty response. Try a different intent.');
+        throw createRuntimeError('EMPTY_RESPONSE', 'Model returned no usable output. Try a different intent.');
     }
 
-    return { success: true, comment: cleaned };
+    const validated = validateOutput(cleaned, payload.mode);
+    return { success: true, comment: validated };
+}
+
+function validateOutput(text, mode) {
+    let normalized = normalizeGeneratedText(text, mode);
+
+    const minLength = mode === 'message' ? 8 : 20;
+    if (!normalized || normalized.length < minLength) {
+        throw new Error('Generated output too short. Try again.');
+    }
+
+    // Reject unresolved placeholders only after attempting cleanup.
+    const placeholderPattern = /\[.{2,40}\]/;
+    if (placeholderPattern.test(normalized)) {
+        throw new Error('Model returned placeholder text. Retrying is recommended.');
+    }
+
+    // Reject responses that are just the prompt echoed back
+    if (normalized.toLowerCase().startsWith('you are') || normalized.toLowerCase().startsWith('your task')) {
+        throw new Error('Model returned prompt instead of output. Try again.');
+    }
+
+    // Post mode: enforce length
+    if (mode === 'post') {
+        const sentences = normalized.split(/[.!?]+/).filter(s => s.trim().length > 0);
+        if (sentences.length > 4) {
+            return sentences.slice(0, 4).join('. ').trim() + '.';
+        }
+    }
+
+    return normalized;
+}
+
+function normalizeGeneratedText(text, mode) {
+    let normalized = text.trim();
+
+    if (mode === 'message' || mode === 'profile') {
+        normalized = normalized
+            .replace(/\b(?:hi|hello|hey)\s*,?\s*\[[^\]]{2,40}\]\s*/i, '')
+            .replace(/\[[^\]]{2,40}\]/g, '')
+            .replace(/\s+([,!.?;:])/g, '$1')
+            .replace(/\(\s*\)/g, '')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+    }
+
+    if (mode === 'post') {
+        normalized = normalized.replace(/\[[^\]]{2,40}\]/g, '').trim();
+    }
+
+    return normalized;
+}
+
+function extractField(text, label) {
+    const pattern = new RegExp(`^${escapeRegExp(label)}:\\s*(.+)$`, 'mi');
+    const match = text.match(pattern);
+    return match?.[1]?.trim() || '';
+}
+
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function shouldAttachImage(useRemote, localModel, remoteModel, remoteEndpoint) {
+    if (useRemote) {
+        return remoteModelSupportsVision(remoteModel, remoteEndpoint);
+    }
+
+    return localModelSupportsVision(localModel);
+}
+
+function localModelSupportsVision(model) {
+    const normalized = model.toLowerCase();
+    if (!normalized) return false;
+
+    return [
+        'bakllava',
+        'gemma3',
+        'llama3.2-vision',
+        'llava',
+        'minicpm-v',
+        'minicpmv',
+        'moondream',
+        'phi3v',
+        'phi-3-vision',
+        'qwen-vl',
+        'qwen2-vl',
+        'qwen2.5-vl',
+        'vision',
+        'vl'
+    ].some((token) => normalized.includes(token));
+}
+
+function remoteModelSupportsVision(model, endpoint) {
+    const normalizedModel = model.toLowerCase();
+    const normalizedEndpoint = endpoint.toLowerCase();
+
+    if (normalizedEndpoint.includes('generativelanguage.googleapis.com')) {
+        return true;
+    }
+
+    return [
+        'claude-3',
+        'gemini',
+        'gpt-4.1',
+        'gpt-4o',
+        'gpt-4-turbo',
+        'llama-vision',
+        'o4',
+        'vision',
+        'vl'
+    ].some((token) => normalizedModel.includes(token));
 }
 
 function createRuntimeError(code, message) {
