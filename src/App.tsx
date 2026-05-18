@@ -1,5 +1,6 @@
 /// <reference types="chrome" />
 import { useEffect, useState, type CSSProperties } from 'react';
+import { MODES, detectModeFromUrl } from './utils/dom.js';
 
 type BannerKind = 'success' | 'error' | 'info';
 
@@ -338,35 +339,17 @@ function App() {
 function resolveContextMode(url?: string) {
   if (!url) return 'Unsupported Page';
 
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname;
-    const path = parsed.pathname;
-
-    if (host === 'linkedin.com' || host.endsWith('.linkedin.com')) {
-      if (path.startsWith('/messaging')) return 'Messages';
-      if (path.startsWith('/in/')) return 'Profile Page';
-      if (path.startsWith('/feed') || path.startsWith('/posts/') || path.startsWith('/feed/update/')) {
-        return 'Post Feed';
-      }
+  const mode = detectModeFromUrl(url);
+  switch (mode) {
+    case MODES.POST:
+      return 'Post Feed';
+    case MODES.PROFILE:
+      return 'Profile Page';
+    case MODES.MESSAGE:
+      return 'Messages';
+    default:
       return 'Unsupported Page';
-    }
-
-    if (host === 'twitter.com' || host.endsWith('.twitter.com') || host === 'x.com' || host.endsWith('.x.com')) {
-      if (path.startsWith('/messages')) return 'Messages';
-      if (path.startsWith('/home') || path.startsWith('/explore') || path.startsWith('/search') || path.includes('/status/')) {
-        return 'Post Feed';
-      }
-
-      const segments = path.split('/').filter(Boolean);
-      const reserved = new Set(['explore', 'home', 'messages', 'notifications', 'search', 'settings']);
-      if (segments.length === 1 && !reserved.has(segments[0])) return 'Profile Page';
-    }
-  } catch {
-    return 'Unsupported Page';
   }
-
-  return 'Unsupported Page';
 }
 
 function validateConfiguration(input: {

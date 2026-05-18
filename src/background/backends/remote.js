@@ -30,11 +30,16 @@ export async function runRemote(apiKey, endpoint, model, promptText, imageBase64
             });
         }
 
-        const response = await fetch(`${baseUrl}?key=${apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts }] })
-        });
+        let response;
+        try {
+            response = await fetch(`${baseUrl}?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts }] })
+            });
+        } catch {
+            throw createBackendError('REMOTE_NETWORK', 'Remote API unreachable. Check your network and endpoint.');
+        }
 
         if (!response.ok) {
             throw mapRemoteError(response.status, true);
@@ -64,18 +69,23 @@ export async function runRemote(apiKey, endpoint, model, promptText, imageBase64
         });
     }
 
-    const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-            model,
-            messages: messages,
-            stream: false
-        })
-    });
+    let response;
+    try {
+        response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model,
+                messages: messages,
+                stream: false
+            })
+        });
+    } catch {
+        throw createBackendError('REMOTE_NETWORK', 'Remote API unreachable. Check your network and endpoint.');
+    }
 
     if (!response.ok) {
         throw mapRemoteError(response.status, false);

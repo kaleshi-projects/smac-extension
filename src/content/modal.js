@@ -1,35 +1,35 @@
 // src/content/modal.js
 
 const POST_INTENTS = [
-    { key: 'congratulate', label: '🎉 Congratulate' },
-    { key: 'congrats_collab', label: '🤝 Congratulate + Open to Collaborate' },
-    { key: 'insight', label: '💡 Add Insight / Build on Their Point' },
-    { key: 'question', label: '❓ Ask a Thoughtful Question' },
-    { key: 'agree_amplify', label: '📢 Agree & Amplify' },
-    { key: 'supportive', label: '💙 Supportive / Encouraging' },
-    { key: 'disagree', label: '🔄 Respectfully Disagree' },
+    { key: 'congratulate', label: '🎉 Congratulate', description: 'Warm congratulation, specific to the achievement mentioned' },
+    { key: 'congrats_collab', label: '🤝 Congratulate + Open to Collaborate', description: 'Congratulation with a genuine offer to work together' },
+    { key: 'insight', label: '💡 Add Insight / Build on Their Point', description: 'Adds a related technical or domain insight' },
+    { key: 'question', label: '❓ Ask a Thoughtful Question', description: 'Opens a genuine conversation thread' },
+    { key: 'agree_amplify', label: '📢 Agree & Amplify', description: 'Strongly endorses and expands the point' },
+    { key: 'supportive', label: '💙 Supportive / Encouraging', description: 'Warm, supportive tone for personal or vulnerable posts' },
+    { key: 'disagree', label: '🔄 Respectfully Disagree', description: 'Professional pushback with reasoning' },
 ];
 
 const PROFILE_INTENTS = [
-    { key: 'normal_connect', label: '🙋 Normal Connection Request' },
-    { key: 'collab', label: '🤝 Open to Collaborate' },
-    { key: 'job_pitch', label: '💼 Job / Freelance Pitch' },
-    { key: 'informational', label: '📚 Learn from Them' },
-    { key: 'mutual_interest', label: '🔗 Shared Interest' },
-    { key: 'follow_up', label: '📩 Follow Up' },
+    { key: 'normal_connect', label: '🙋 Normal Connection Request', description: 'Friendly, no agenda' },
+    { key: 'collab', label: '🤝 Open to Collaborate', description: 'Mutual project or contribution' },
+    { key: 'job_pitch', label: '💼 Job / Freelance Pitch', description: 'Respectful pitch referencing their work' },
+    { key: 'informational', label: '📚 Learn from Them', description: 'Informational request asking for advice' },
+    { key: 'mutual_interest', label: '🔗 Shared Interest', description: 'Common community, tech stack, or topic' },
+    { key: 'follow_up', label: '📩 Follow Up', description: 'Reconnecting after prior interaction' },
 ];
 
 const MESSAGE_INTENTS_EMPTY = [
-    { key: 'new_intro', label: '👋 Start a Conversation' },
-    { key: 'job_inquiry', label: '💼 Job / Opportunity Inquiry' },
+    { key: 'new_intro', label: '👋 Start a Conversation', description: 'Use when the thread is empty' },
+    { key: 'job_inquiry', label: '💼 Job / Opportunity Inquiry', description: 'Use when the thread is empty' },
 ];
 
 const MESSAGE_INTENTS_ACTIVE = [
-    { key: 'reply_natural', label: '💬 Natural Reply' },
-    { key: 'reply_professional', label: '🏢 Professional Reply' },
-    { key: 'reply_follow_up', label: '📌 Follow Up (no response yet)' },
-    { key: 'reply_decline', label: '🚫 Politely Decline' },
-    { key: 'reply_schedule', label: '📅 Suggest a Meeting' },
+    { key: 'reply_natural', label: '💬 Natural Reply', description: 'Matches the tone of the thread' },
+    { key: 'reply_professional', label: '🏢 Professional / Formal Reply', description: 'More polished and formal' },
+    { key: 'reply_follow_up', label: '📌 Follow Up (no response yet)', description: 'Nudges the conversation forward' },
+    { key: 'reply_decline', label: '🚫 Politely Decline', description: 'Respectful no without burning the relationship' },
+    { key: 'reply_schedule', label: '📅 Suggest a Meeting', description: 'Proposes a call or next-step meeting' },
 ];
 
 export function showIntentModal(mode, isEmptyThread = false) {
@@ -84,17 +84,20 @@ export function showIntentModal(mode, isEmptyThread = false) {
         title.textContent = `What kind of ${modeLabel} do you want?`;
         modal.appendChild(title);
 
-        intents.forEach(({ label }) => {
+        intents.forEach(({ label, description }) => {
             const btn = document.createElement('button');
             btn.style.cssText = `
-                display:block;width:100%;text-align:left;padding:10px 14px;
+                display:block;width:100%;text-align:left;padding:12px 14px;
                 margin-bottom:8px;background:#0f172a;color:#e2e8f0;
-                border:1px solid #334155;border-radius:8px;cursor:pointer;
-                font-size:13px;font-family:inherit;transition:background 0.15s;
+                border:1px solid #334155;border-radius:10px;cursor:pointer;
+                font-size:13px;font-family:inherit;transition:background 0.15s, border-color 0.15s;
             `;
-            btn.textContent = label;
-            btn.onmouseenter = () => { btn.style.background = '#334155'; };
-            btn.onmouseleave = () => { btn.style.background = '#0f172a'; };
+            btn.innerHTML = `
+                <div style="font-weight:600; margin-bottom:4px;">${escapeHtml(label)}</div>
+                <div style="font-size:12px; color:#94a3b8; line-height:1.4;">${escapeHtml(description)}</div>
+            `;
+            btn.onmouseenter = () => { btn.style.background = '#16233A'; btn.style.borderColor = '#475569'; };
+            btn.onmouseleave = () => { btn.style.background = '#0f172a'; btn.style.borderColor = '#334155'; };
             btn.addEventListener('click', () => dismiss(label));
             modal.appendChild(btn);
         });
@@ -113,4 +116,13 @@ export function showIntentModal(mode, isEmptyThread = false) {
         shadow.appendChild(backdrop);
         document.addEventListener('keydown', onKey);
     });
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 }
