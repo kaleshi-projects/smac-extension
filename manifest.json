@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "SMAC Extension",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "icons": {
         "16": "icon.jpg",
         "48": "icon.jpg",
@@ -9,13 +9,18 @@
     },
     "permissions": [
         "storage",
-        "clipboardWrite"
+        "clipboardWrite",
+        "tabs"
     ],
     "host_permissions": [
         "http://localhost:11434/*",
+        "https://*/*",
+        "https://x.com/*",
         "https://*.x.com/*",
+        "https://twitter.com/*",
         "https://*.twitter.com/*",
         "https://*.twimg.com/*",
+        "https://linkedin.com/*",
         "https://*.linkedin.com/*",
         "https://*.licdn.com/*"
     ],
@@ -26,9 +31,12 @@
     "content_scripts": [
         {
             "matches": [
-                "*://*.twitter.com/*",
-                "*://*.x.com/*",
-                "*://*.linkedin.com/*"
+                "https://twitter.com/*",
+                "https://*.twitter.com/*",
+                "https://x.com/*",
+                "https://*.x.com/*",
+                "https://linkedin.com/*",
+                "https://*.linkedin.com/*"
             ],
             "js": [
                 "src/content/index.js"
@@ -39,12 +47,18 @@
     "web_accessible_resources": [
         {
             "resources": [
-                "src/utils/injected.js"
+                "assets/*.js",
+                "assets/*.css",
+                "src/utils/injected.js",
+                "src/content/modal.js"
             ],
             "matches": [
-                "*://*.twitter.com/*",
-                "*://*.x.com/*",
-                "*://*.linkedin.com/*"
+                "https://www.linkedin.com/*",
+                "https://linkedin.com/*",
+                "https://*.linkedin.com/*",
+                "https://x.com/*",
+                "https://*.x.com/*",
+                "https://*.twitter.com/*"
             ]
         }
     ],
